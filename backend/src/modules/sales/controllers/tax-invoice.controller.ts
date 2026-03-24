@@ -8,11 +8,13 @@ import {
   ParseUUIDPipe,
   Res,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
 import { Response } from 'express';
 import { TaxInvoiceService, CreateTaxInvoiceDto, TaxInvoiceFilter } from '../services/tax-invoice.service';
 import { TaxInvoice } from '@domain/entities/tax-invoice.entity';
+import { CurrentUser, AuthUser } from '@modules/auth/decorators/current-user.decorator';
 
+@ApiBearerAuth('JWT')
 @ApiTags('Sales - Tax Invoices')
 @Controller('tax-invoices')
 export class TaxInvoiceController {
@@ -21,9 +23,12 @@ export class TaxInvoiceController {
   @Post()
   @ApiOperation({ summary: 'Create a new tax invoice' })
   @ApiResponse({ status: 201, description: 'Tax invoice created successfully', type: TaxInvoice })
-  async create(@Body() dto: CreateTaxInvoiceDto): Promise<TaxInvoice> {
-    const userId = 'system';
-    return this.taxInvoiceService.create(dto, userId);
+  // FIX (Bug #2): Extract userId from JWT instead of hardcoding 'system'
+  async create(
+    @Body() dto: CreateTaxInvoiceDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<TaxInvoice> {
+    return this.taxInvoiceService.create(dto, user.id);
   }
 
   @Get()
@@ -53,7 +58,6 @@ export class TaxInvoiceController {
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 20,
     };
-
     return this.taxInvoiceService.findAll(filter);
   }
 
@@ -73,14 +77,12 @@ export class TaxInvoiceController {
 
   @Post(':id/generate-xml')
   @ApiOperation({ summary: 'Generate XML for tax invoice' })
-  @ApiResponse({ status: 200, description: 'XML generated successfully' })
   async generateXml(
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
-    const userId = 'system';
-    const result = await this.taxInvoiceService.generateXml(id, userId);
-
+    const result = await this.taxInvoiceService.generateXml(id, user.id);
     if (result.success && result.content) {
       res.setHeader('Content-Type', 'application/xml');
       res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
@@ -94,11 +96,10 @@ export class TaxInvoiceController {
   @ApiOperation({ summary: 'Generate XML for multiple tax invoices' })
   async generateBulkXml(
     @Body('ids') ids: string[],
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
-    const userId = 'system';
-    const result = await this.taxInvoiceService.generateBulkXml(ids, userId);
-
+    const result = await this.taxInvoiceService.generateBulkXml(ids, user.id);
     if (result.success && result.content) {
       res.setHeader('Content-Type', 'application/xml');
       res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
