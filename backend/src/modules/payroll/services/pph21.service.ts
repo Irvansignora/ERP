@@ -158,22 +158,16 @@ export class Pph21Service {
   constructor(private readonly prisma: PrismaService) {}
 
   async calculateMonthly(dto: Pph21CalculationDto): Promise<Pph21CalculationResult> {
-    const employee = await this.prisma.partner.findUnique({
-      where: { id: dto.employeeId },
-    });
-
+    const employee = await this.prisma.partner.findUnique({ where: { id: dto.employeeId } });
     if (!employee || !employee.isEmployee) {
       throw new Error('Employee not found');
     }
-
     if (!employee.terCategory) {
       throw new Error('Employee does not have TER category assigned');
     }
 
     const grossIncome = new Decimal(dto.grossIncome);
     const terCategory = employee.terCategory as TerCategory;
-
-    // Calculate TER
     const calculated = this.calculateTer(grossIncome, terCategory);
 
     return {
@@ -188,40 +182,31 @@ export class Pph21Service {
   }
 
   async calculateYearEnd(employeeId: string, taxYear: number): Promise<Pph21CalculationResult> {
-    // Get all PPh 21 slips for the year
-    const slips = await this.prisma.withholdingSlip.findMany({
-      where: {
-        subjectId: employeeId,
-        slipType: 'PPH_21',
-        taxYear,
-      },
-    });
-
-    const employee = await this.prisma.partner.findUnique({
-      where: { id: employeeId },
-    });
-
+    const employee = await this.prisma.partner.findUnique({ where: { id: employeeId } });
     if (!employee || !employee.isEmployee) {
       throw new Error('Employee not found');
     }
 
-    // Calculate total gross income for the year
+    // FIX (Bug #2 / yearEnd): Validate terCategory before using it — same guard as calculateMonthly.
+    // Previously: terCategory was cast without checking, silently producing wrong results.
+    if (!employee.terCategory) {
+      throw new Error('Employee does not have TER category assigned');
+    }
+
+    const slips = await this.prisma.withholdingSlip.findMany({
+      where: { subjectId: employeeId, slipType: 'PPH_21', taxYear },
+    });
+
     const totalGrossIncome = slips.reduce(
       (sum, slip) => sum.plus(slip.incomeAmount),
       new Decimal(0),
     );
-
-    // Calculate total tax paid
     const totalTaxPaid = slips.reduce(
       (sum, slip) => sum.plus(slip.taxAmount),
       new Decimal(0),
     );
 
-    // Calculate yearly tax using progressive rates (simplified)
-    // In real implementation, this should use the actual PPh 21 calculation
     const yearlyTax = this.calculateYearlyTax(totalGrossIncome, employee.ptkpStatus as any);
-
-    // Calculate difference
     const taxDifference = yearlyTax.minus(totalTaxPaid);
 
     return {
@@ -249,7 +234,6 @@ export class Pph21Service {
     }
 
     const taxAmount = grossIncome.times(applicableRate.dividedBy(100));
-
     return {
       taxBase: grossIncome,
       taxRate: applicableRate,
@@ -258,11 +242,6 @@ export class Pph21Service {
   }
 
   private calculateYearlyTax(grossIncome: Decimal, ptkpStatus: any): Decimal {
-    // Simplified yearly tax calculation
-    // In real implementation, this should follow the actual PPh 21 progressive rates
-    // after deducting PTKP and employment expenses
-    
-    // PTKP amounts (2024)
     const ptkpAmounts: Record<string, Decimal> = {
       'TK_0': new Decimal(54000000),
       'K_0': new Decimal(58500000),
@@ -272,28 +251,22 @@ export class Pph21Service {
     };
 
     const ptkp = ptkpAmounts[ptkpStatus] || ptkpAmounts['TK_0'];
-    
-    // Employment expense (5% of gross, max 6 million)
-    const employmentExpense = Decimal.min(
-      grossIncome.times(0.05),
-      new Decimal(6000000),
-    );
-
-    // Net income
+    const employmentExpense = Decimal.min(grossIncome.times(0.05), new Decimal(6000000));
     const netIncome = grossIncome.minus(employmentExpense);
-
-    // Taxable income (PKP)
     const pkp = Decimal.max(netIncome.minus(ptkp), new Decimal(0));
 
-    // Progressive tax calculation
     let tax = new Decimal(0);
-    
+
     if (pkp.greaterThan(0)) {
+      // FIX (Bug #12): Added 35% bracket for PKP > Rp 5 miliar (UU HPP No.7/2021).
+      // Previously: the last bracket stopped at 30% with no upper limit check,
+      // causing employees earning > Rp 5B/year to be under-taxed.
       const brackets = [
         { limit: new Decimal(60000000), rate: new Decimal(5) },
         { limit: new Decimal(250000000), rate: new Decimal(15) },
         { limit: new Decimal(500000000), rate: new Decimal(25) },
         { limit: new Decimal(5000000000), rate: new Decimal(30) },
+        { limit: new Decimal(999999999999), rate: new Decimal(35) }, // FIX: tarif 35% untuk PKP > Rp 5M
       ];
 
       let remainingPkp = pkp;
