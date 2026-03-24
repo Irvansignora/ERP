@@ -1,6 +1,10 @@
 import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { InventoryService } from '../services/inventory.service';
+import { CurrentUser, AuthUser } from '@modules/auth/decorators/current-user.decorator';
 
+@ApiBearerAuth('JWT')
+@ApiTags('Inventory')
 @Controller('inventory')
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
@@ -31,8 +35,9 @@ export class InventoryController {
   }
 
   @Post('movements')
-  createMovement(@Body() body: any) {
-    return this.inventoryService.createMovement(body);
+  createMovement(@Body() body: any, @CurrentUser() user: AuthUser) {
+    // FIX (Bug #2): Use real userId from JWT
+    return this.inventoryService.createMovement({ ...body, userId: user.id });
   }
 
   @Get('movements')
