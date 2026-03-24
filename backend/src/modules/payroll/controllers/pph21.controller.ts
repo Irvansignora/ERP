@@ -1,7 +1,8 @@
 import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
 import { Pph21Service, Pph21CalculationDto, Pph21CalculationResult } from '../services/pph21.service';
 
+@ApiBearerAuth('JWT')
 @ApiTags('Payroll - PPh 21')
 @Controller('pph21')
 export class Pph21Controller {
