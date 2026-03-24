@@ -83,7 +83,7 @@ export class InventoryService {
         },
       });
 
-      // Update stock levels
+      // Update destination stock (IN or TRANSFER)
       if (dto.toWarehouseId) {
         await tx.stock.upsert({
           where: {
@@ -104,15 +104,47 @@ export class InventoryService {
         });
       }
 
+      // Update source stock (OUT or TRANSFER)
       if (dto.fromWarehouseId) {
-        const existingStock = await tx.stock.findFirst({
-          where: { warehouseId: dto.fromWarehouseId, productId: dto.productId },
+        // FIX (Bug #11): Use the SAME composite unique key (warehouseId + productId + batchNumber)
+        // that the upsert above uses for IN movements, instead of findFirst() which returns
+        // an arbitrary record when multiple stock entries exist for the same product/warehouse.
+        // Using findFirst() + update-by-id could decrement the WRONG batch's stock.
+        const batchNumber = dto.batchNumber ?? '';
+
+        const existingStock = await tx.stock.findUnique({
+          where: {
+            warehouseId_productId_batchNumber: {
+              warehouseId: dto.fromWarehouseId,
+              productId: dto.productId,
+              batchNumber,
+            },
+          },
         });
-        if (!existingStock || Number(existingStock.quantity) < dto.quantity) {
-          throw new BadRequestException('Insufficient stock for this movement');
+
+        if (!existingStock) {
+          throw new BadRequestException(
+            `No stock found for product in warehouse` +
+            (dto.batchNumber ? ` (batch: ${dto.batchNumber})` : ''),
+          );
         }
+
+        if (Number(existingStock.quantity) < dto.quantity) {
+          throw new BadRequestException(
+            `Insufficient stock: available ${existingStock.quantity}, requested ${dto.quantity}` +
+            (dto.batchNumber ? ` (batch: ${dto.batchNumber})` : ''),
+          );
+        }
+
+        // Update using the unique composite key — no chance of hitting the wrong record
         await tx.stock.update({
-          where: { id: existingStock.id },
+          where: {
+            warehouseId_productId_batchNumber: {
+              warehouseId: dto.fromWarehouseId,
+              productId: dto.productId,
+              batchNumber,
+            },
+          },
           data: { quantity: { decrement: dto.quantity } },
         });
       }
