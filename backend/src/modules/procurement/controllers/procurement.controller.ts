@@ -1,6 +1,10 @@
 import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ProcurementService } from '../services/procurement.service';
+import { CurrentUser, AuthUser } from '@modules/auth/decorators/current-user.decorator';
 
+@ApiBearerAuth('JWT')
+@ApiTags('Purchase - Procurement')
 @Controller('procurement')
 export class ProcurementController {
   constructor(private readonly procurementService: ProcurementService) {}
@@ -11,8 +15,8 @@ export class ProcurementController {
   }
 
   @Post('purchase-requests')
-  createPurchaseRequest(@Body() body: any) {
-    return this.procurementService.createPurchaseRequest(body);
+  createPurchaseRequest(@Body() body: any, @CurrentUser() user: AuthUser) {
+    return this.procurementService.createPurchaseRequest({ ...body, userId: user.id });
   }
 
   @Post('purchase-requests/:id/approve')
@@ -36,8 +40,8 @@ export class ProcurementController {
   }
 
   @Post('purchase-orders')
-  createPurchaseOrder(@Body() body: any) {
-    return this.procurementService.createPurchaseOrder(body);
+  createPurchaseOrder(@Body() body: any, @CurrentUser() user: AuthUser) {
+    return this.procurementService.createPurchaseOrder({ ...body, userId: user.id });
   }
 
   @Post('purchase-orders/:id/confirm')
