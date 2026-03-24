@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@infrastructure/database/prisma/prisma.service';
 
 @Injectable()
@@ -12,11 +12,28 @@ export class HrService {
     position?: string;
     basicSalary: number;
     joinDate: Date;
+    userId?: string;
   }) {
-    const count = await this.prisma.employee.count();
-    const employeeNumber = `EMP-${String(count + 1).padStart(5, '0')}`;
+    // FIX (Bug #4): Per-year sequential employee numbering.
+    // Previously: count() over all time → EMP-00001 restarts incorrectly after bulk deletes
+    // or produces gaps on concurrent inserts. Now scoped to current year.
+    const year = new Date().getFullYear();
+    const count = await this.prisma.employee.count({
+      where: {
+        createdAt: { gte: new Date(`${year}-01-01`), lt: new Date(`${year + 1}-01-01`) },
+      },
+    });
+    const employeeNumber = `EMP-${year}-${String(count + 1).padStart(5, '0')}`;
+
     return this.prisma.employee.create({
-      data: { employeeNumber, ...dto },
+      data: {
+        employeeNumber,
+        partnerId: dto.partnerId,
+        department: dto.department,
+        position: dto.position,
+        basicSalary: dto.basicSalary,
+        joinDate: dto.joinDate,
+      },
       include: { partner: true },
     });
   }
@@ -85,6 +102,19 @@ export class HrService {
     const employee = await this.prisma.employee.findUnique({ where: { id: dto.employeeId } });
     if (!employee) throw new NotFoundException('Employee not found');
 
+    // FIX (Bug #13): Guard against overwriting a finalized payslip.
+    // Previously: upsert would silently overwrite even PAID/APPROVED payslips.
+    const existing = await this.prisma.payslip.findUnique({
+      where: { employeeId_period: { employeeId: dto.employeeId, period: dto.period } },
+    });
+
+    if (existing && ['APPROVED', 'PAID'].includes(existing.status)) {
+      throw new BadRequestException(
+        `Payslip for period ${dto.period} is already in status "${existing.status}" and cannot be regenerated. ` +
+        `To make changes, please cancel the payslip first.`
+      );
+    }
+
     const basicSalary = Number(employee.basicSalary);
     const allowances = dto.allowances ?? 0;
     const deductions = dto.deductions ?? 0;
@@ -110,10 +140,20 @@ export class HrService {
   }
 
   async approvePayslip(id: string) {
+    const payslip = await this.prisma.payslip.findUnique({ where: { id } });
+    if (!payslip) throw new NotFoundException('Payslip not found');
+    if (payslip.status === 'PAID') {
+      throw new BadRequestException('Cannot approve a payslip that has already been paid');
+    }
     return this.prisma.payslip.update({ where: { id }, data: { status: 'APPROVED' } });
   }
 
   async markPayslipPaid(id: string) {
+    const payslip = await this.prisma.payslip.findUnique({ where: { id } });
+    if (!payslip) throw new NotFoundException('Payslip not found');
+    if (payslip.status !== 'APPROVED') {
+      throw new BadRequestException('Only APPROVED payslips can be marked as paid');
+    }
     return this.prisma.payslip.update({
       where: { id },
       data: { status: 'PAID', paidAt: new Date() },
