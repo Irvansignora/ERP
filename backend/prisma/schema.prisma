@@ -1,0 +1,766 @@
+// This is your Prisma schema file for CoreTax ERP System
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider      = "prisma-client-js"
+  // FIX: binaryTargets needed for Vercel serverless (Linux x86_64)
+  binaryTargets = ["native", "rhel-openssl-1.0.x", "linux-musl"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  // FIX: Use DATABASE_URL for pooled connection (via PgBouncer/Supabase/Neon)
+  // and DIRECT_URL for migrations that bypass the pooler
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum PartnerType {
+  CUSTOMER
+  VENDOR
+  BOTH
+}
+
+enum PartnerStatus {
+  ACTIVE
+  INACTIVE
+  BLACKLISTED
+}
+
+enum TaxStatus {
+  PKP
+  NON_PKP
+}
+
+enum PtkpStatus {
+  TK_0
+  K_0
+  K_1
+  K_2
+  K_3
+  TK_1
+  TK_2
+  TK_3
+}
+
+enum TerCategory {
+  A
+  B
+  C
+}
+
+enum InvoiceType {
+  NORMAL
+  REPLACEMENT
+  CANCELLATION
+}
+
+enum InvoiceOption {
+  NORMAL
+  PENGGANTI
+}
+
+enum TransactionCode {
+  KODE_01
+  KODE_02
+  KODE_03
+  KODE_04
+  KODE_05
+  KODE_06
+  KODE_07
+  KODE_08
+  KODE_09
+}
+
+enum DocumentType {
+  TIN
+  NIK
+  PASSPORT
+}
+
+enum WithholdingType {
+  PPH_21
+  PPH_23
+  PPH_4_AYAT_2
+  PPH_15
+  PPH_22
+  PPH_26
+}
+
+enum WithholdingStatus {
+  DRAFT
+  ISSUED
+  CANCELLED
+  AMENDED
+}
+
+enum JournalStatus {
+  DRAFT
+  POSTED
+  REVERSED
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum ProductType {
+  GOODS
+  SERVICES
+  BOTH
+}
+
+// ============================================
+// MASTER DATA - PARTNER (Customer/Vendor)
+// ============================================
+
+model Partner {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+  updatedBy   String?  @map("updated_by")
+  isDeleted   Boolean  @default(false) @map("is_deleted")
+  deletedAt   DateTime? @map("deleted_at")
+  deletedBy   String?  @map("deleted_by")
+
+  // Basic Information
+  code        String   @unique
+  name        String
+  type        PartnerType
+  status      PartnerStatus @default(ACTIVE)
+  
+  // Tax Identity (Critical for CoreTax)
+  npwp15      String?  @map("npwp_15") // 15 digit NPWP (legacy)
+  npwp16      String?  @map("npwp_16") // 16 digit NPWP (CoreTax format)
+  nitku       String?  @map("nitku") // Nomor Identitas Tempat Kegiatan Usaha (22 digit)
+  nik         String?  @map("nik") // Nomor Induk Kependudukan
+  passport    String?  @map("passport") // For foreign taxpayers
+  
+  // Tax Status
+  taxStatus   TaxStatus @default(NON_PKP) @map("tax_status")
+  isPkp       Boolean  @default(false) @map("is_pkp")
+  pkpDate     DateTime? @map("pkp_date")
+  
+  // Contact Information
+  address     String?
+  countryCode String   @default("IDN") @map("country_code")
+  province    String?
+  city        String?
+  district    String?
+  subDistrict String?  @map("sub_district")
+  postalCode  String?  @map("postal_code")
+  email       String?
+  phone       String?
+  fax         String?
+  
+  // Business Information
+  businessType String? @map("business_type")
+  businessField String? @map("business_field")
+  
+  // PPh 21 Specific (for employees)
+  ptkpStatus  PtkpStatus? @map("ptkp_status")
+  terCategory TerCategory? @map("ter_category")
+  isEmployee  Boolean  @default(false) @map("is_employee")
+  joinDate    DateTime? @map("join_date")
+  
+  // Bank Information
+  bankName    String?  @map("bank_name")
+  bankAccount String?  @map("bank_account")
+  bankBranch  String?  @map("bank_branch")
+  
+  // Relations
+  taxInvoicesAsBuyer  TaxInvoice[] @relation("BuyerTaxInvoices")
+  taxInvoicesAsSeller TaxInvoice[] @relation("SellerTaxInvoices")
+  withholdingSlips    WithholdingSlip[]
+  journalEntries      JournalEntry[]
+  products            Product[]
+  
+  @@index([npwp16])
+  @@index([nik])
+  @@index([nitku])
+  @@index([type])
+  @@index([status])
+  @@map("partners")
+}
+
+// ============================================
+// MASTER DATA - PRODUCT & SERVICES
+// ============================================
+
+model Product {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Basic Information
+  code        String   @unique
+  name        String
+  description String?
+  type        ProductType
+  
+  // Tax Object Code (Kode Objek Pajak)
+  taxObjectCode   String  @map("tax_object_code") // e.g., "21-100-01" for salary, "01-000-01" for VAT goods
+  taxObjectName   String? @map("tax_object_name")
+  
+  // VAT Configuration
+  isVatTaxable    Boolean @default(true) @map("is_vat_taxable")
+  vatRate         Decimal @default(12) @db.Decimal(5, 2)
+  
+  // PPh Configuration
+  pphType         WithholdingType? @map("pph_type")
+  pphRate         Decimal? @db.Decimal(5, 2)
+  
+  // Unit of Measure (UOM)
+  uomCode         String  @map("uom_code") // Standard DJP UOM code
+  uomName         String  @map("uom_name")
+  
+  // Pricing
+  defaultPrice    Decimal? @db.Decimal(19, 4)
+  
+  // Relations
+  supplierId      String? @map("supplier_id")
+  supplier        Partner? @relation(fields: [supplierId], references: [id])
+  
+  invoiceLines    TaxInvoiceLine[]
+  
+  @@index([taxObjectCode])
+  @@index([type])
+  @@map("products")
+}
+
+// ============================================
+// TAX INVOICE (Faktur Pajak Keluaran/Masukan)
+// ============================================
+
+model TaxInvoice {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+  updatedBy   String?  @map("updated_by")
+  
+  // Invoice Identity
+  invoiceNumber   String  @unique @map("invoice_number")
+  invoiceDate     DateTime @map("invoice_date")
+  invoiceType     InvoiceType @default(NORMAL) @map("invoice_type")
+  invoiceOption   InvoiceOption @default(NORMAL) @map("invoice_option")
+  
+  // Reference to replaced/cancelled invoice
+  referenceInvoiceId String? @map("reference_invoice_id")
+  referenceInvoice   TaxInvoice? @relation("InvoiceReference", fields: [referenceInvoiceId], references: [id])
+  relatedInvoices    TaxInvoice[] @relation("InvoiceReference")
+  
+  // Tax Period
+  taxPeriod       String  @map("tax_period") // Format: MM-YYYY
+  taxYear         Int     @map("tax_year")
+  taxMonth        Int     @map("tax_month")
+  
+  // Transaction Code (Kode Transaksi)
+  transactionCode TransactionCode @map("transaction_code")
+  
+  // Additional Info
+  additionalInfo  String? @map("additional_info")
+  customDoc       String? @map("custom_doc")
+  customDocMonthYear String? @map("custom_doc_month_year")
+  referenceDesc   String? @map("reference_desc")
+  facilityStamp   String? @map("facility_stamp")
+  
+  // Seller Information
+  sellerId        String  @map("seller_id")
+  seller          Partner @relation("SellerTaxInvoices", fields: [sellerId], references: [id])
+  sellerTin       String  @map("seller_tin") // 16 digit
+  sellerNitku     String  @map("seller_nitku") // 22 digit
+  
+  // Buyer Information
+  buyerId         String  @map("buyer_id")
+  buyer           Partner @relation("BuyerTaxInvoices", fields: [buyerId], references: [id])
+  buyerTin        String  @map("buyer_tin") // 16 digit
+  buyerDocument   DocumentType @default(TIN) @map("buyer_document")
+  buyerDocumentNumber String? @map("buyer_document_number")
+  buyerCountry    String  @default("IDN") @map("buyer_country")
+  buyerName       String  @map("buyer_name")
+  buyerAddress    String  @map("buyer_address")
+  buyerEmail      String? @map("buyer_email")
+  buyerNitku      String  @map("buyer_nitku") // 22 digit
+  
+  // Tax Calculation
+  isTaxInclusive  Boolean @default(false) @map("is_tax_inclusive")
+  vatRate         Decimal @default(12) @db.Decimal(5, 2)
+  
+  // Totals
+  totalDpp        Decimal @db.Decimal(19, 4) @map("total_dpp") // Dasar Pengenaan Pajak
+  totalPpn        Decimal @db.Decimal(19, 4) @map("total_ppn") // PPN
+  totalPpnBm      Decimal @default(0) @db.Decimal(19, 4) @map("total_ppn_bm") // PPnBM
+  totalDiscount   Decimal @default(0) @db.Decimal(19, 4) @map("total_discount")
+  grandTotal      Decimal @db.Decimal(19, 4) @map("grand_total")
+  
+  // CoreTax XML Status
+  xmlGenerated    Boolean @default(false) @map("xml_generated")
+  xmlGeneratedAt  DateTime? @map("xml_generated_at")
+  xmlFileName     String? @map("xml_file_name")
+  xmlContent      String? @map("xml_content") @db.Text
+  
+  // Approval Status (from DJP)
+  approvalStatus  String? @map("approval_status") // PENDING, APPROVED, REJECTED
+  approvalDate    DateTime? @map("approval_date")
+  approvalNumber  String? @map("approval_number") // Nomor Faktur Pajak dari DJP
+  
+  // Relations
+  lines           TaxInvoiceLine[]
+  
+  // Journal Entry Reference
+  journalEntryId  String? @unique @map("journal_entry_id")
+  journalEntry    JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  
+  @@index([invoiceNumber])
+  @@index([taxPeriod])
+  @@index([sellerTin])
+  @@index([buyerTin])
+  @@index([invoiceDate])
+  @@index([xmlGenerated])
+  @@map("tax_invoices")
+}
+
+model TaxInvoiceLine {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  // Reference
+  taxInvoiceId    String @map("tax_invoice_id")
+  taxInvoice      TaxInvoice @relation(fields: [taxInvoiceId], references: [id], onDelete: Cascade)
+  
+  // Line Number
+  lineNumber      Int     @map("line_number")
+  
+  // Product Information
+  productId       String? @map("product_id")
+  product         Product? @relation(fields: [productId], references: [id])
+  
+  // Item Details
+  productCode     String  @map("product_code")
+  productName     String  @map("product_name")
+  productType     String  @default("B") @map("product_type") // B = Barang, J = Jasa
+  
+  // UOM
+  unitCode        String  @map("unit_code")
+  unitName        String? @map("unit_name")
+  
+  // Quantity & Price
+  quantity        Decimal @db.Decimal(19, 4)
+  price           Decimal @db.Decimal(19, 4)
+  
+  // Discount
+  discount        Decimal @default(0) @db.Decimal(19, 4)
+  
+  // Tax Calculation
+  totalPrice      Decimal @db.Decimal(19, 4) @map("total_price") // Qty * Price - Discount
+  dpp             Decimal @db.Decimal(19, 4) // Dasar Pengenaan Pajak
+  otherTaxBase    Decimal? @db.Decimal(19, 4) @map("other_tax_base") // DPP Nilai Lain (for certain transactions)
+  
+  // VAT
+  vatRate         Decimal @db.Decimal(5, 2) @map("vat_rate")
+  vatAmount       Decimal @db.Decimal(19, 4) @map("vat_amount")
+  
+  // PPnBM (if applicable)
+  ppnbmRate       Decimal @default(0) @db.Decimal(5, 2) @map("ppnbm_rate")
+  ppnbmAmount     Decimal @default(0) @db.Decimal(19, 4) @map("ppnbm_amount")
+  
+  @@unique([taxInvoiceId, lineNumber])
+  @@index([taxInvoiceId])
+  @@map("tax_invoice_lines")
+}
+
+// ============================================
+// WITHHOLDING SLIP (Bukti Potong PPh)
+// ============================================
+
+model WithholdingSlip {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+  updatedBy   String?  @map("updated_by")
+  
+  // Slip Identity
+  slipNumber      String  @unique @map("slip_number")
+  slipType        WithholdingType @map("slip_type")
+  status          WithholdingStatus @default(DRAFT)
+  
+  // Tax Period
+  taxPeriod       String  @map("tax_period") // Format: MM-YYYY
+  taxYear         Int     @map("tax_year")
+  taxMonth        Int     @map("tax_month")
+  
+  // Withholder (Pemotong)
+  withholderTin   String  @map("withholder_tin") // 16 digit
+  withholderNitku String  @map("withholder_nitku") // 22 digit
+  withholderName  String  @map("withholder_name")
+  
+  // Subject (Pihak Dipotong)
+  subjectId       String  @map("subject_id")
+  subject         Partner @relation(fields: [subjectId], references: [id])
+  subjectTin      String? @map("subject_tin") // 16 digit
+  subjectNik      String? @map("subject_nik")
+  subjectName     String  @map("subject_name")
+  subjectAddress  String? @map("subject_address")
+  subjectNitku    String? @map("subject_nitku") // 22 digit
+  
+  // Tax Object
+  taxObjectCode   String  @map("tax_object_code")
+  taxObjectName   String  @map("tax_object_name")
+  
+  // Income Details
+  incomeAmount    Decimal @db.Decimal(19, 4) @map("income_amount")
+  taxBase         Decimal @db.Decimal(19, 4) @map("tax_base")
+  taxRate         Decimal @db.Decimal(5, 2) @map("tax_rate")
+  taxAmount       Decimal @db.Decimal(19, 4) @map("tax_amount")
+  
+  // PPh 21 TER Specific
+  terCategory     TerCategory? @map("ter_category")
+  terRate         Decimal? @db.Decimal(5, 2) @map("ter_rate")
+  
+  // Document Reference
+  documentNumber  String? @map("document_number")
+  documentDate    DateTime? @map("document_date")
+  
+  // Supporting Document
+  supportingDocType   String? @map("supporting_doc_type")
+  supportingDocNumber String? @map("supporting_doc_number")
+  
+  // CoreTax XML Status
+  xmlGenerated    Boolean @default(false) @map("xml_generated")
+  xmlGeneratedAt  DateTime? @map("xml_generated_at")
+  xmlFileName     String? @map("xml_file_name")
+  xmlContent      String? @map("xml_content") @db.Text
+  
+  // Relations
+  journalEntryId  String? @unique @map("journal_entry_id")
+  journalEntry    JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  
+  @@index([slipNumber])
+  @@index([taxPeriod])
+  @@index([slipType])
+  @@index([subjectTin])
+  @@index([xmlGenerated])
+  @@map("withholding_slips")
+}
+
+// ============================================
+// GENERAL LEDGER - ACCOUNT
+// ============================================
+
+model Account {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Account Identity
+  code        String   @unique
+  name        String
+  type        AccountType
+  
+  // Hierarchy
+  parentId    String?  @map("parent_id")
+  parent      Account? @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children    Account[] @relation("AccountHierarchy")
+  
+  // Tax Mapping
+  taxObjectCode   String? @map("tax_object_code")
+  isTaxAccount    Boolean @default(false) @map("is_tax_account")
+  taxType         String? @map("tax_type") // PPN, PPh 21, PPh 23, etc.
+  
+  // Configuration
+  isActive        Boolean @default(true) @map("is_active")
+  isBankAccount   Boolean @default(false) @map("is_bank_account")
+  currency        String  @default("IDR")
+  
+  // Opening Balance
+  openingBalance  Decimal @default(0) @db.Decimal(19, 4) @map("opening_balance")
+  openingDate     DateTime? @map("opening_date")
+  
+  // Relations
+  journalLines    JournalLine[]
+  
+  @@index([type])
+  @@index([taxObjectCode])
+  @@index([isTaxAccount])
+  @@map("accounts")
+}
+
+// ============================================
+// GENERAL LEDGER - JOURNAL ENTRY
+// ============================================
+
+model JournalEntry {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+  postedBy    String?  @map("posted_by")
+  postedAt    DateTime? @map("posted_at")
+  
+  // Journal Identity
+  entryNumber     String  @unique @map("entry_number")
+  entryDate       DateTime @map("entry_date")
+  referenceType   String? @map("reference_type") // INVOICE, WITHHOLDING, etc.
+  referenceId     String? @map("reference_id")
+  
+  // Period
+  period          String  @map("period") // Format: MM-YYYY
+  year            Int     @map("year")
+  month           Int     @map("month")
+  
+  // Description
+  description     String
+  memo            String?
+  
+  // Status
+  status          JournalStatus @default(DRAFT)
+  
+  // Totals (must balance: debit = credit)
+  totalDebit      Decimal @db.Decimal(19, 4) @map("total_debit")
+  totalCredit     Decimal @db.Decimal(19, 4) @map("total_credit")
+  
+  // Reversal
+  isReversal      Boolean @default(false) @map("is_reversal")
+  reversedFromId  String? @unique @map("reversed_from_id")
+  reversedFrom    JournalEntry? @relation("JournalReversal", fields: [reversedFromId], references: [id])
+  reversalEntry   JournalEntry? @relation("JournalReversal")
+  
+  // Relations
+  lines           JournalLine[]
+  partnerId       String? @map("partner_id")
+  partner         Partner? @relation(fields: [partnerId], references: [id])
+  
+  // Related Documents
+  taxInvoice      TaxInvoice?
+  withholdingSlip WithholdingSlip?
+  
+  @@index([entryNumber])
+  @@index([entryDate])
+  @@index([period])
+  @@index([status])
+  @@index([referenceType, referenceId])
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  // Reference
+  journalEntryId  String @map("journal_entry_id")
+  journalEntry    JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  
+  // Line Number
+  lineNumber      Int     @map("line_number")
+  
+  // Account
+  accountId       String  @map("account_id")
+  account         Account @relation(fields: [accountId], references: [id])
+  
+  // Amount
+  debit           Decimal @default(0) @db.Decimal(19, 4)
+  credit          Decimal @default(0) @db.Decimal(19, 4)
+  
+  // Description
+  description     String?
+  
+  // Cost Center / Project (optional)
+  costCenter      String? @map("cost_center")
+  projectCode     String? @map("project_code")
+  
+  @@unique([journalEntryId, lineNumber])
+  @@index([journalEntryId])
+  @@index([accountId])
+  @@map("journal_lines")
+}
+
+// ============================================
+// TAX MAPPING & CONFIGURATION
+// ============================================
+
+model TaxMapping {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Account Mapping
+  accountId       String @map("account_id")
+  accountCode     String @map("account_code")
+  accountName     String @map("account_name")
+  
+  // Tax Information
+  taxType         String @map("tax_type") // PPN, PPh 21, PPh 23, PPh 4(2), etc.
+  taxObjectCode   String @map("tax_object_code")
+  taxObjectName   String @map("tax_object_name")
+  taxRate         Decimal @db.Decimal(5, 2) @map("tax_rate")
+  
+  // Transaction Type
+  transactionType String @map("transaction_type") // SALES, PURCHASE, PAYROLL, etc.
+  
+  // Journal Mapping
+  debitAccountId  String @map("debit_account_id")
+  creditAccountId String @map("credit_account_id")
+  
+  // Active
+  isActive        Boolean @default(true) @map("is_active")
+  
+  @@index([taxType])
+  @@index([taxObjectCode])
+  @@index([transactionType])
+  @@map("tax_mappings")
+}
+
+// ============================================
+// XML GENERATION LOGS
+// ============================================
+
+model XmlGenerationLog {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  // Generation Info
+  documentType    String @map("document_type") // TAX_INVOICE, WITHHOLDING, etc.
+  documentId      String @map("document_id")
+  
+  // XML Info
+  fileName        String @map("file_name")
+  filePath        String? @map("file_path")
+  fileSize        Int?    @map("file_size")
+  
+  // Status
+  status          String  @map("status") // SUCCESS, FAILED, VALIDATED
+  errorMessage    String? @map("error_message")
+  
+  // Validation Results
+  validationResults Json? @map("validation_results")
+  
+  // Generated By
+  generatedBy     String @map("generated_by")
+  
+  // Upload Status
+  uploadedToDjp   Boolean @default(false) @map("uploaded_to_djp")
+  uploadedAt      DateTime? @map("uploaded_at")
+  djpResponse     String? @map("djp_response")
+  
+  @@index([documentType])
+  @@index([documentId])
+  @@index([createdAt])
+  @@map("xml_generation_logs")
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Identity
+  email       String   @unique
+  username    String   @unique
+  password    String   // Hashed
+  
+  // Profile
+  firstName   String   @map("first_name")
+  lastName    String   @map("last_name")
+  phone       String?
+  
+  // Status
+  isActive    Boolean  @default(true) @map("is_active")
+  isVerified  Boolean  @default(false) @map("is_verified")
+  lastLoginAt DateTime? @map("last_login_at")
+  
+  // Roles
+  roles       UserRole[]
+  
+  @@index([email])
+  @@index([username])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  name        String   @unique
+  description String?
+  permissions String[] // Array of permission strings
+  
+  users       UserRole[]
+  
+  @@map("roles")
+}
+
+model UserRole {
+  id          String   @id @default(uuid())
+  
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  roleId      String   @map("role_id")
+  role        Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  
+  assignedAt  DateTime @default(now()) @map("assigned_at")
+  assignedBy  String?  @map("assigned_by")
+  
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+// ============================================
+// COMPANY CONFIGURATION
+// ============================================
+
+model CompanyConfig {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Company Identity
+  companyName     String @map("company_name")
+  companyTin      String @map("company_tin") // 16 digit NPWP
+  companyNitku    String @map("company_nitku") // 22 digit
+  companyNik      String? @map("company_nik")
+  
+  // Address
+  address         String
+  countryCode     String @default("IDN") @map("country_code")
+  province        String
+  city            String
+  postalCode      String @map("postal_code")
+  
+  // Contact
+  email           String
+  phone           String
+  
+  // Tax Configuration
+  isPkp           Boolean @default(false) @map("is_pkp")
+  pkpDate         DateTime? @map("pkp_date")
+  
+  // Fiscal Year
+  fiscalYearStart Int @default(1) @map("fiscal_year_start") // Month number (1-12)
+  
+  // Default Tax Rates
+  defaultVatRate  Decimal @default(12) @db.Decimal(5, 2) @map("default_vat_rate")
+  
+  // CoreTax Settings
+  coretaxEnvironment  String @default("sandbox") @map("coretax_environment")
+  coretaxApiKey       String? @map("coretax_api_key")
+  
+  @@map("company_config")
+}

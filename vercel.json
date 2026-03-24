@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "projects": [
+    {
+      "name": "coretax-erp-frontend",
+      "rootDirectory": "frontend",
+      "framework": "nextjs",
+      "buildCommand": "npm run build",
+      "outputDirectory": ".next",
+      "installCommand": "npm install"
+    },
+    {
+      "name": "coretax-erp-backend",
+      "rootDirectory": "backend",
+      "framework": null,
+      "buildCommand": "npm run build",
+      "installCommand": "npm install",
+      "outputDirectory": "dist"
+    }
+  ]
+}
