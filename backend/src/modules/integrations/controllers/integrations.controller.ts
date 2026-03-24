@@ -1,11 +1,13 @@
 import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
+import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { IntegrationsService } from '../services/integrations.service';
 
+@ApiBearerAuth('JWT')
+@ApiTags('API & Integrations')
 @Controller('integrations')
 export class IntegrationsController {
   constructor(private readonly integrationsService: IntegrationsService) {}
 
-  // Payment Gateway
   @Post('payment/charge')
   createCharge(@Body() body: any) {
     return this.integrationsService.createPaymentGatewayCharge(body);
@@ -19,7 +21,6 @@ export class IntegrationsController {
     return this.integrationsService.checkPaymentStatus(provider, transactionId);
   }
 
-  // Marketplace
   @Post('marketplace/sync')
   syncMarketplaceOrders(@Body() body: any) {
     return this.integrationsService.syncMarketplaceOrders(body.provider, {
@@ -28,7 +29,6 @@ export class IntegrationsController {
     });
   }
 
-  // Shipping
   @Post('shipping/rates')
   checkShippingRate(@Body() body: any) {
     return this.integrationsService.checkShippingRate(body);
@@ -40,11 +40,13 @@ export class IntegrationsController {
   }
 
   @Get('shipping/track/:provider/:awbNumber')
-  trackShipment(@Param('provider') provider: string, @Param('awbNumber') awbNumber: string) {
+  trackShipment(
+    @Param('provider') provider: string,
+    @Param('awbNumber') awbNumber: string,
+  ) {
     return this.integrationsService.trackShipment(provider, awbNumber);
   }
 
-  // Logs
   @Get('logs')
   getIntegrationLogs(@Query() query: any) {
     return this.integrationsService.getIntegrationLogs(query);
