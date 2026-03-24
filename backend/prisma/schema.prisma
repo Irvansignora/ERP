@@ -1,0 +1,1586 @@
+// This is your Prisma schema file for CoreTax ERP System
+// Learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider      = "prisma-client-js"
+  // FIX: binaryTargets needed for Vercel serverless (Linux x86_64)
+  binaryTargets = ["native", "rhel-openssl-1.0.x", "linux-musl"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  // FIX: Use DATABASE_URL for pooled connection (via PgBouncer/Supabase/Neon)
+  // and DIRECT_URL for migrations that bypass the pooler
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ============================================
+// ENUMS
+// ============================================
+
+enum PartnerType {
+  CUSTOMER
+  VENDOR
+  BOTH
+}
+
+enum PartnerStatus {
+  ACTIVE
+  INACTIVE
+  BLACKLISTED
+}
+
+enum TaxStatus {
+  PKP
+  NON_PKP
+}
+
+enum PtkpStatus {
+  TK_0
+  K_0
+  K_1
+  K_2
+  K_3
+  TK_1
+  TK_2
+  TK_3
+}
+
+enum TerCategory {
+  A
+  B
+  C
+}
+
+enum InvoiceType {
+  NORMAL
+  REPLACEMENT
+  CANCELLATION
+}
+
+enum InvoiceOption {
+  NORMAL
+  PENGGANTI
+}
+
+enum TransactionCode {
+  KODE_01
+  KODE_02
+  KODE_03
+  KODE_04
+  KODE_05
+  KODE_06
+  KODE_07
+  KODE_08
+  KODE_09
+}
+
+enum DocumentType {
+  TIN
+  NIK
+  PASSPORT
+}
+
+enum WithholdingType {
+  PPH_21
+  PPH_23
+  PPH_4_AYAT_2
+  PPH_15
+  PPH_22
+  PPH_26
+}
+
+enum WithholdingStatus {
+  DRAFT
+  ISSUED
+  CANCELLED
+  AMENDED
+}
+
+enum JournalStatus {
+  DRAFT
+  POSTED
+  REVERSED
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+enum ProductType {
+  GOODS
+  SERVICES
+  BOTH
+}
+
+// ============================================
+// MASTER DATA - PARTNER (Customer/Vendor)
+// ============================================
+
+model Partner {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+  updatedBy   String?  @map("updated_by")
+  isDeleted   Boolean  @default(false) @map("is_deleted")
+  deletedAt   DateTime? @map("deleted_at")
+  deletedBy   String?  @map("deleted_by")
+
+  // Basic Information
+  code        String   @unique
+  name        String
+  type        PartnerType
+  status      PartnerStatus @default(ACTIVE)
+  
+  // Tax Identity (Critical for CoreTax)
+  npwp15      String?  @map("npwp_15") // 15 digit NPWP (legacy)
+  npwp16      String?  @map("npwp_16") // 16 digit NPWP (CoreTax format)
+  nitku       String?  @map("nitku") // Nomor Identitas Tempat Kegiatan Usaha (22 digit)
+  nik         String?  @map("nik") // Nomor Induk Kependudukan
+  passport    String?  @map("passport") // For foreign taxpayers
+  
+  // Tax Status
+  taxStatus   TaxStatus @default(NON_PKP) @map("tax_status")
+  isPkp       Boolean  @default(false) @map("is_pkp")
+  pkpDate     DateTime? @map("pkp_date")
+  
+  // Contact Information
+  address     String?
+  countryCode String   @default("IDN") @map("country_code")
+  province    String?
+  city        String?
+  district    String?
+  subDistrict String?  @map("sub_district")
+  postalCode  String?  @map("postal_code")
+  email       String?
+  phone       String?
+  fax         String?
+  
+  // Business Information
+  businessType String? @map("business_type")
+  businessField String? @map("business_field")
+  
+  // PPh 21 Specific (for employees)
+  ptkpStatus  PtkpStatus? @map("ptkp_status")
+  terCategory TerCategory? @map("ter_category")
+  isEmployee  Boolean  @default(false) @map("is_employee")
+  joinDate    DateTime? @map("join_date")
+  
+  // Bank Information
+  bankName    String?  @map("bank_name")
+  bankAccount String?  @map("bank_account")
+  bankBranch  String?  @map("bank_branch")
+  
+  // Relations
+  taxInvoicesAsBuyer  TaxInvoice[] @relation("BuyerTaxInvoices")
+  taxInvoicesAsSeller TaxInvoice[] @relation("SellerTaxInvoices")
+  withholdingSlips    WithholdingSlip[]
+  journalEntries      JournalEntry[]
+  products            Product[]
+  quotations          Quotation[]    @relation("CustomerQuotations")
+  salesOrders         SalesOrder[]   @relation("CustomerSalesOrders")
+  purchaseOrders      PurchaseOrder[] @relation("SupplierPurchaseOrders")
+  crmLeads            CrmLead[]      @relation("PartnerLeads")
+  payments            Payment[]      @relation("PartnerPayments")
+  projects            Project[]      @relation("CustomerProjects")
+  employee            Employee?      @relation("PartnerEmployee")
+  
+  @@index([npwp16])
+  @@index([nik])
+  @@index([nitku])
+  @@index([type])
+  @@index([status])
+  @@map("partners")
+}
+
+// ============================================
+// MASTER DATA - PRODUCT & SERVICES
+// ============================================
+
+model Product {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Basic Information
+  code        String   @unique
+  name        String
+  description String?
+  type        ProductType
+  
+  // Tax Object Code (Kode Objek Pajak)
+  taxObjectCode   String  @map("tax_object_code") // e.g., "21-100-01" for salary, "01-000-01" for VAT goods
+  taxObjectName   String? @map("tax_object_name")
+  
+  // VAT Configuration
+  isVatTaxable    Boolean @default(true) @map("is_vat_taxable")
+  vatRate         Decimal @default(12) @db.Decimal(5, 2)
+  
+  // PPh Configuration
+  pphType         WithholdingType? @map("pph_type")
+  pphRate         Decimal? @db.Decimal(5, 2)
+  
+  // Unit of Measure (UOM)
+  uomCode         String  @map("uom_code") // Standard DJP UOM code
+  uomName         String  @map("uom_name")
+  
+  // Pricing
+  defaultPrice    Decimal? @db.Decimal(19, 4)
+  
+  // Relations
+  supplierId      String? @map("supplier_id")
+  supplier        Partner? @relation(fields: [supplierId], references: [id])
+  
+  invoiceLines    TaxInvoiceLine[]
+  stocks          Stock[]
+  stockMovements  StockMovement[]
+  quotationLines  QuotationLine[]   @relation("QuotationLines")
+  soLines         SalesOrderLine[]  @relation("SOLines")
+  purchaseRequestLines PurchaseRequestLine[] @relation("PRLines")
+  poLines         PurchaseOrderLine[] @relation("POLines")
+  priceListItems  PriceListItem[]   @relation("ProductPrices")
+  bomProduct      BillOfMaterials?  @relation("ProductBOM")
+  bomComponents   BomComponent[]    @relation("BOMComponents")
+  
+  @@index([taxObjectCode])
+  @@index([type])
+  @@map("products")
+}
+
+// ============================================
+// TAX INVOICE (Faktur Pajak Keluaran/Masukan)
+// ============================================
+
+model TaxInvoice {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+  updatedBy   String?  @map("updated_by")
+  
+  // Invoice Identity
+  invoiceNumber   String  @unique @map("invoice_number")
+  invoiceDate     DateTime @map("invoice_date")
+  invoiceType     InvoiceType @default(NORMAL) @map("invoice_type")
+  invoiceOption   InvoiceOption @default(NORMAL) @map("invoice_option")
+  
+  // Reference to replaced/cancelled invoice
+  referenceInvoiceId String? @map("reference_invoice_id")
+  referenceInvoice   TaxInvoice? @relation("InvoiceReference", fields: [referenceInvoiceId], references: [id])
+  relatedInvoices    TaxInvoice[] @relation("InvoiceReference")
+  
+  // Tax Period
+  taxPeriod       String  @map("tax_period") // Format: MM-YYYY
+  taxYear         Int     @map("tax_year")
+  taxMonth        Int     @map("tax_month")
+  
+  // Transaction Code (Kode Transaksi)
+  transactionCode TransactionCode @map("transaction_code")
+  
+  // Additional Info
+  additionalInfo  String? @map("additional_info")
+  customDoc       String? @map("custom_doc")
+  customDocMonthYear String? @map("custom_doc_month_year")
+  referenceDesc   String? @map("reference_desc")
+  facilityStamp   String? @map("facility_stamp")
+  
+  // Seller Information
+  sellerId        String  @map("seller_id")
+  seller          Partner @relation("SellerTaxInvoices", fields: [sellerId], references: [id])
+  sellerTin       String  @map("seller_tin") // 16 digit
+  sellerNitku     String  @map("seller_nitku") // 22 digit
+  
+  // Buyer Information
+  buyerId         String  @map("buyer_id")
+  buyer           Partner @relation("BuyerTaxInvoices", fields: [buyerId], references: [id])
+  buyerTin        String  @map("buyer_tin") // 16 digit
+  buyerDocument   DocumentType @default(TIN) @map("buyer_document")
+  buyerDocumentNumber String? @map("buyer_document_number")
+  buyerCountry    String  @default("IDN") @map("buyer_country")
+  buyerName       String  @map("buyer_name")
+  buyerAddress    String  @map("buyer_address")
+  buyerEmail      String? @map("buyer_email")
+  buyerNitku      String  @map("buyer_nitku") // 22 digit
+  
+  // Tax Calculation
+  isTaxInclusive  Boolean @default(false) @map("is_tax_inclusive")
+  vatRate         Decimal @default(12) @db.Decimal(5, 2)
+  
+  // Totals
+  totalDpp        Decimal @db.Decimal(19, 4) @map("total_dpp") // Dasar Pengenaan Pajak
+  totalPpn        Decimal @db.Decimal(19, 4) @map("total_ppn") // PPN
+  totalPpnBm      Decimal @default(0) @db.Decimal(19, 4) @map("total_ppn_bm") // PPnBM
+  totalDiscount   Decimal @default(0) @db.Decimal(19, 4) @map("total_discount")
+  grandTotal      Decimal @db.Decimal(19, 4) @map("grand_total")
+  
+  // CoreTax XML Status
+  xmlGenerated    Boolean @default(false) @map("xml_generated")
+  xmlGeneratedAt  DateTime? @map("xml_generated_at")
+  xmlFileName     String? @map("xml_file_name")
+  xmlContent      String? @map("xml_content") @db.Text
+  
+  // Approval Status (from DJP)
+  approvalStatus  String? @map("approval_status") // PENDING, APPROVED, REJECTED
+  approvalDate    DateTime? @map("approval_date")
+  approvalNumber  String? @map("approval_number") // Nomor Faktur Pajak dari DJP
+  
+  // Relations
+  lines           TaxInvoiceLine[]
+  
+  // Journal Entry Reference
+  journalEntryId  String? @unique @map("journal_entry_id")
+  journalEntry    JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  
+  @@index([invoiceNumber])
+  @@index([taxPeriod])
+  @@index([sellerTin])
+  @@index([buyerTin])
+  @@index([invoiceDate])
+  @@index([xmlGenerated])
+  @@map("tax_invoices")
+}
+
+model TaxInvoiceLine {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  // Reference
+  taxInvoiceId    String @map("tax_invoice_id")
+  taxInvoice      TaxInvoice @relation(fields: [taxInvoiceId], references: [id], onDelete: Cascade)
+  
+  // Line Number
+  lineNumber      Int     @map("line_number")
+  
+  // Product Information
+  productId       String? @map("product_id")
+  product         Product? @relation(fields: [productId], references: [id])
+  
+  // Item Details
+  productCode     String  @map("product_code")
+  productName     String  @map("product_name")
+  productType     String  @default("B") @map("product_type") // B = Barang, J = Jasa
+  
+  // UOM
+  unitCode        String  @map("unit_code")
+  unitName        String? @map("unit_name")
+  
+  // Quantity & Price
+  quantity        Decimal @db.Decimal(19, 4)
+  price           Decimal @db.Decimal(19, 4)
+  
+  // Discount
+  discount        Decimal @default(0) @db.Decimal(19, 4)
+  
+  // Tax Calculation
+  totalPrice      Decimal @db.Decimal(19, 4) @map("total_price") // Qty * Price - Discount
+  dpp             Decimal @db.Decimal(19, 4) // Dasar Pengenaan Pajak
+  otherTaxBase    Decimal? @db.Decimal(19, 4) @map("other_tax_base") // DPP Nilai Lain (for certain transactions)
+  
+  // VAT
+  vatRate         Decimal @db.Decimal(5, 2) @map("vat_rate")
+  vatAmount       Decimal @db.Decimal(19, 4) @map("vat_amount")
+  
+  // PPnBM (if applicable)
+  ppnbmRate       Decimal @default(0) @db.Decimal(5, 2) @map("ppnbm_rate")
+  ppnbmAmount     Decimal @default(0) @db.Decimal(19, 4) @map("ppnbm_amount")
+  
+  @@unique([taxInvoiceId, lineNumber])
+  @@index([taxInvoiceId])
+  @@map("tax_invoice_lines")
+}
+
+// ============================================
+// WITHHOLDING SLIP (Bukti Potong PPh)
+// ============================================
+
+model WithholdingSlip {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+  updatedBy   String?  @map("updated_by")
+  
+  // Slip Identity
+  slipNumber      String  @unique @map("slip_number")
+  slipType        WithholdingType @map("slip_type")
+  status          WithholdingStatus @default(DRAFT)
+  
+  // Tax Period
+  taxPeriod       String  @map("tax_period") // Format: MM-YYYY
+  taxYear         Int     @map("tax_year")
+  taxMonth        Int     @map("tax_month")
+  
+  // Withholder (Pemotong)
+  withholderTin   String  @map("withholder_tin") // 16 digit
+  withholderNitku String  @map("withholder_nitku") // 22 digit
+  withholderName  String  @map("withholder_name")
+  
+  // Subject (Pihak Dipotong)
+  subjectId       String  @map("subject_id")
+  subject         Partner @relation(fields: [subjectId], references: [id])
+  subjectTin      String? @map("subject_tin") // 16 digit
+  subjectNik      String? @map("subject_nik")
+  subjectName     String  @map("subject_name")
+  subjectAddress  String? @map("subject_address")
+  subjectNitku    String? @map("subject_nitku") // 22 digit
+  
+  // Tax Object
+  taxObjectCode   String  @map("tax_object_code")
+  taxObjectName   String  @map("tax_object_name")
+  
+  // Income Details
+  incomeAmount    Decimal @db.Decimal(19, 4) @map("income_amount")
+  taxBase         Decimal @db.Decimal(19, 4) @map("tax_base")
+  taxRate         Decimal @db.Decimal(5, 2) @map("tax_rate")
+  taxAmount       Decimal @db.Decimal(19, 4) @map("tax_amount")
+  
+  // PPh 21 TER Specific
+  terCategory     TerCategory? @map("ter_category")
+  terRate         Decimal? @db.Decimal(5, 2) @map("ter_rate")
+  
+  // Document Reference
+  documentNumber  String? @map("document_number")
+  documentDate    DateTime? @map("document_date")
+  
+  // Supporting Document
+  supportingDocType   String? @map("supporting_doc_type")
+  supportingDocNumber String? @map("supporting_doc_number")
+  
+  // CoreTax XML Status
+  xmlGenerated    Boolean @default(false) @map("xml_generated")
+  xmlGeneratedAt  DateTime? @map("xml_generated_at")
+  xmlFileName     String? @map("xml_file_name")
+  xmlContent      String? @map("xml_content") @db.Text
+  
+  // Relations
+  journalEntryId  String? @unique @map("journal_entry_id")
+  journalEntry    JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  
+  @@index([slipNumber])
+  @@index([taxPeriod])
+  @@index([slipType])
+  @@index([subjectTin])
+  @@index([xmlGenerated])
+  @@map("withholding_slips")
+}
+
+// ============================================
+// GENERAL LEDGER - ACCOUNT
+// ============================================
+
+model Account {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Account Identity
+  code        String   @unique
+  name        String
+  type        AccountType
+  
+  // Hierarchy
+  parentId    String?  @map("parent_id")
+  parent      Account? @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children    Account[] @relation("AccountHierarchy")
+  
+  // Tax Mapping
+  taxObjectCode   String? @map("tax_object_code")
+  isTaxAccount    Boolean @default(false) @map("is_tax_account")
+  taxType         String? @map("tax_type") // PPN, PPh 21, PPh 23, etc.
+  
+  // Configuration
+  isActive        Boolean @default(true) @map("is_active")
+  isBankAccount   Boolean @default(false) @map("is_bank_account")
+  currency        String  @default("IDR")
+  
+  // Opening Balance
+  openingBalance  Decimal @default(0) @db.Decimal(19, 4) @map("opening_balance")
+  openingDate     DateTime? @map("opening_date")
+  
+  // Relations
+  journalLines    JournalLine[]
+  budgetLines     BudgetLine[]    @relation("BudgetLines")
+  bankStatements  BankStatement[] @relation("BankStatements")
+  payments        Payment[]       @relation("PaymentAccount")
+  
+  @@index([type])
+  @@index([taxObjectCode])
+  @@index([isTaxAccount])
+  @@map("accounts")
+}
+
+// ============================================
+// GENERAL LEDGER - JOURNAL ENTRY
+// ============================================
+
+model JournalEntry {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+  postedBy    String?  @map("posted_by")
+  postedAt    DateTime? @map("posted_at")
+  
+  // Journal Identity
+  entryNumber     String  @unique @map("entry_number")
+  entryDate       DateTime @map("entry_date")
+  referenceType   String? @map("reference_type") // INVOICE, WITHHOLDING, etc.
+  referenceId     String? @map("reference_id")
+  
+  // Period
+  period          String  @map("period") // Format: MM-YYYY
+  year            Int     @map("year")
+  month           Int     @map("month")
+  
+  // Description
+  description     String
+  memo            String?
+  
+  // Status
+  status          JournalStatus @default(DRAFT)
+  
+  // Totals (must balance: debit = credit)
+  totalDebit      Decimal @db.Decimal(19, 4) @map("total_debit")
+  totalCredit     Decimal @db.Decimal(19, 4) @map("total_credit")
+  
+  // Reversal
+  isReversal      Boolean @default(false) @map("is_reversal")
+  reversedFromId  String? @unique @map("reversed_from_id")
+  reversedFrom    JournalEntry? @relation("JournalReversal", fields: [reversedFromId], references: [id])
+  reversalEntry   JournalEntry? @relation("JournalReversal")
+  
+  // Relations
+  lines           JournalLine[]
+  partnerId       String? @map("partner_id")
+  partner         Partner? @relation(fields: [partnerId], references: [id])
+  
+  // Related Documents
+  taxInvoice      TaxInvoice?
+  withholdingSlip WithholdingSlip?
+  salesOrder      SalesOrder?       @relation("SOJournal")
+  purchaseOrder   PurchaseOrder?    @relation("POJournal")
+  bankStatement   BankStatement?    @relation("BankStatementJournal")
+  payment         Payment?          @relation("PaymentJournal")
+  payslip         Payslip?          @relation("PayslipJournal")
+  
+  @@index([entryNumber])
+  @@index([entryDate])
+  @@index([period])
+  @@index([status])
+  @@index([referenceType, referenceId])
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  // Reference
+  journalEntryId  String @map("journal_entry_id")
+  journalEntry    JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  
+  // Line Number
+  lineNumber      Int     @map("line_number")
+  
+  // Account
+  accountId       String  @map("account_id")
+  account         Account @relation(fields: [accountId], references: [id])
+  
+  // Amount
+  debit           Decimal @default(0) @db.Decimal(19, 4)
+  credit          Decimal @default(0) @db.Decimal(19, 4)
+  
+  // Description
+  description     String?
+  
+  // Cost Center / Project (optional)
+  costCenter      String? @map("cost_center")
+  projectCode     String? @map("project_code")
+  
+  @@unique([journalEntryId, lineNumber])
+  @@index([journalEntryId])
+  @@index([accountId])
+  @@map("journal_lines")
+}
+
+// ============================================
+// TAX MAPPING & CONFIGURATION
+// ============================================
+
+model TaxMapping {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Account Mapping
+  accountId       String @map("account_id")
+  accountCode     String @map("account_code")
+  accountName     String @map("account_name")
+  
+  // Tax Information
+  taxType         String @map("tax_type") // PPN, PPh 21, PPh 23, PPh 4(2), etc.
+  taxObjectCode   String @map("tax_object_code")
+  taxObjectName   String @map("tax_object_name")
+  taxRate         Decimal @db.Decimal(5, 2) @map("tax_rate")
+  
+  // Transaction Type
+  transactionType String @map("transaction_type") // SALES, PURCHASE, PAYROLL, etc.
+  
+  // Journal Mapping
+  debitAccountId  String @map("debit_account_id")
+  creditAccountId String @map("credit_account_id")
+  
+  // Active
+  isActive        Boolean @default(true) @map("is_active")
+  
+  @@index([taxType])
+  @@index([taxObjectCode])
+  @@index([transactionType])
+  @@map("tax_mappings")
+}
+
+// ============================================
+// XML GENERATION LOGS
+// ============================================
+
+model XmlGenerationLog {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  // Generation Info
+  documentType    String @map("document_type") // TAX_INVOICE, WITHHOLDING, etc.
+  documentId      String @map("document_id")
+  
+  // XML Info
+  fileName        String @map("file_name")
+  filePath        String? @map("file_path")
+  fileSize        Int?    @map("file_size")
+  
+  // Status
+  status          String  @map("status") // SUCCESS, FAILED, VALIDATED
+  errorMessage    String? @map("error_message")
+  
+  // Validation Results
+  validationResults Json? @map("validation_results")
+  
+  // Generated By
+  generatedBy     String @map("generated_by")
+  
+  // Upload Status
+  uploadedToDjp   Boolean @default(false) @map("uploaded_to_djp")
+  uploadedAt      DateTime? @map("uploaded_at")
+  djpResponse     String? @map("djp_response")
+  
+  @@index([documentType])
+  @@index([documentId])
+  @@index([createdAt])
+  @@map("xml_generation_logs")
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model User {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Identity
+  email       String   @unique
+  username    String   @unique
+  password    String   // Hashed
+  
+  // Profile
+  firstName   String   @map("first_name")
+  lastName    String   @map("last_name")
+  phone       String?
+  
+  // Status
+  isActive    Boolean  @default(true) @map("is_active")
+  isVerified  Boolean  @default(false) @map("is_verified")
+  lastLoginAt DateTime? @map("last_login_at")
+  
+  // Roles
+  roles       UserRole[]
+  
+  @@index([email])
+  @@index([username])
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  
+  name        String   @unique
+  description String?
+  permissions String[] // Array of permission strings
+  
+  users       UserRole[]
+  
+  @@map("roles")
+}
+
+model UserRole {
+  id          String   @id @default(uuid())
+  
+  userId      String   @map("user_id")
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  roleId      String   @map("role_id")
+  role        Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  
+  assignedAt  DateTime @default(now()) @map("assigned_at")
+  assignedBy  String?  @map("assigned_by")
+  
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+  @@map("user_roles")
+}
+
+// ============================================
+// COMPANY CONFIGURATION
+// ============================================
+
+model CompanyConfig {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  
+  // Company Identity
+  companyName     String @map("company_name")
+  companyTin      String @map("company_tin") // 16 digit NPWP
+  companyNitku    String @map("company_nitku") // 22 digit
+  companyNik      String? @map("company_nik")
+  
+  // Address
+  address         String
+  countryCode     String @default("IDN") @map("country_code")
+  province        String
+  city            String
+  postalCode      String @map("postal_code")
+  
+  // Contact
+  email           String
+  phone           String
+  
+  // Tax Configuration
+  isPkp           Boolean @default(false) @map("is_pkp")
+  pkpDate         DateTime? @map("pkp_date")
+  
+  // Fiscal Year
+  fiscalYearStart Int @default(1) @map("fiscal_year_start") // Month number (1-12)
+  
+  // Default Tax Rates
+  defaultVatRate  Decimal @default(12) @db.Decimal(5, 2) @map("default_vat_rate")
+  
+  // CoreTax Settings
+  coretaxEnvironment  String @default("sandbox") @map("coretax_environment")
+  coretaxApiKey       String? @map("coretax_api_key")
+  
+  @@map("company_config")
+}
+
+// ============================================
+// INVENTORY MANAGEMENT (Feature 2 - NEW)
+// ============================================
+
+enum StockMovementType {
+  IN
+  OUT
+  TRANSFER
+  ADJUSTMENT
+}
+
+enum WarehouseStatus {
+  ACTIVE
+  INACTIVE
+}
+
+model Warehouse {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  code        String   @unique
+  name        String
+  address     String?
+  status      WarehouseStatus @default(ACTIVE)
+  isDefault   Boolean  @default(false) @map("is_default")
+
+  stocks      Stock[]
+  movementsFrom StockMovement[] @relation("MovementFrom")
+  movementsTo   StockMovement[] @relation("MovementTo")
+
+  @@map("warehouses")
+}
+
+model Stock {
+  id          String   @id @default(uuid())
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  warehouseId String   @map("warehouse_id")
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+
+  productId   String   @map("product_id")
+  product     Product  @relation(fields: [productId], references: [id])
+
+  quantity    Decimal  @default(0) @db.Decimal(19, 4)
+  reservedQty Decimal  @default(0) @db.Decimal(19, 4) @map("reserved_qty")
+  minimumQty  Decimal  @default(0) @db.Decimal(19, 4) @map("minimum_qty")
+
+  batchNumber String?  @map("batch_number")
+  serialNumber String? @map("serial_number")
+  expiryDate  DateTime? @map("expiry_date")
+
+  @@unique([warehouseId, productId, batchNumber])
+  @@index([warehouseId])
+  @@index([productId])
+  @@map("stocks")
+}
+
+model StockMovement {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  createdBy   String?  @map("created_by")
+
+  movementType  StockMovementType @map("movement_type")
+  movementDate  DateTime @map("movement_date")
+  referenceType String?  @map("reference_type") // SALES_ORDER, PURCHASE_ORDER, etc.
+  referenceId   String?  @map("reference_id")
+
+  productId     String   @map("product_id")
+  product       Product  @relation(fields: [productId], references: [id])
+
+  fromWarehouseId String? @map("from_warehouse_id")
+  fromWarehouse   Warehouse? @relation("MovementFrom", fields: [fromWarehouseId], references: [id])
+
+  toWarehouseId   String?  @map("to_warehouse_id")
+  toWarehouse     Warehouse? @relation("MovementTo", fields: [toWarehouseId], references: [id])
+
+  quantity      Decimal  @db.Decimal(19, 4)
+  unitCost      Decimal? @db.Decimal(19, 4) @map("unit_cost")
+  batchNumber   String?  @map("batch_number")
+  serialNumber  String?  @map("serial_number")
+  notes         String?
+
+  @@index([movementType])
+  @@index([movementDate])
+  @@index([productId])
+  @@map("stock_movements")
+}
+
+// ============================================
+// SALES MANAGEMENT (Feature 3 - ENHANCED)
+// ============================================
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  PARTIAL
+  COMPLETED
+  CANCELLED
+}
+
+model Quotation {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+
+  quotationNumber String @unique @map("quotation_number")
+  quotationDate   DateTime @map("quotation_date")
+  expiryDate      DateTime? @map("expiry_date")
+  status          String @default("DRAFT") // DRAFT, SENT, ACCEPTED, REJECTED, EXPIRED
+
+  customerId    String @map("customer_id")
+  customer      Partner @relation("CustomerQuotations", fields: [customerId], references: [id])
+
+  notes         String?
+  terms         String?
+  discount      Decimal @default(0) @db.Decimal(19, 4)
+  subtotal      Decimal @db.Decimal(19, 4)
+  taxAmount     Decimal @db.Decimal(19, 4) @map("tax_amount")
+  grandTotal    Decimal @db.Decimal(19, 4) @map("grand_total")
+
+  lines         QuotationLine[]
+  salesOrders   SalesOrder[]
+
+  @@map("quotations")
+}
+
+model QuotationLine {
+  id            String @id @default(uuid())
+  quotationId   String @map("quotation_id")
+  quotation     Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+
+  lineNumber    Int @map("line_number")
+  productId     String? @map("product_id")
+  product       Product? @relation("QuotationLines", fields: [productId], references: [id])
+  description   String
+  quantity      Decimal @db.Decimal(19, 4)
+  unitPrice     Decimal @db.Decimal(19, 4) @map("unit_price")
+  discount      Decimal @default(0) @db.Decimal(19, 4)
+  totalPrice    Decimal @db.Decimal(19, 4) @map("total_price")
+
+  @@unique([quotationId, lineNumber])
+  @@map("quotation_lines")
+}
+
+model SalesOrder {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+
+  orderNumber   String @unique @map("order_number")
+  orderDate     DateTime @map("order_date")
+  deliveryDate  DateTime? @map("delivery_date")
+  status        SalesOrderStatus @default(DRAFT)
+
+  customerId    String @map("customer_id")
+  customer      Partner @relation("CustomerSalesOrders", fields: [customerId], references: [id])
+
+  quotationId   String? @map("quotation_id")
+  quotation     Quotation? @relation(fields: [quotationId], references: [id])
+
+  notes         String?
+  subtotal      Decimal @db.Decimal(19, 4)
+  taxAmount     Decimal @db.Decimal(19, 4) @map("tax_amount")
+  grandTotal    Decimal @db.Decimal(19, 4) @map("grand_total")
+
+  lines         SalesOrderLine[]
+
+  // Journal Reference
+  journalEntryId String? @unique @map("journal_entry_id")
+  journalEntry   JournalEntry? @relation("SOJournal", fields: [journalEntryId], references: [id])
+
+  @@index([status])
+  @@index([customerId])
+  @@map("sales_orders")
+}
+
+model SalesOrderLine {
+  id            String @id @default(uuid())
+  salesOrderId  String @map("sales_order_id")
+  salesOrder    SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+
+  lineNumber    Int @map("line_number")
+  productId     String? @map("product_id")
+  product       Product? @relation("SOLines", fields: [productId], references: [id])
+  description   String
+  quantity      Decimal @db.Decimal(19, 4)
+  deliveredQty  Decimal @default(0) @db.Decimal(19, 4) @map("delivered_qty")
+  unitPrice     Decimal @db.Decimal(19, 4) @map("unit_price")
+  discount      Decimal @default(0) @db.Decimal(19, 4)
+  totalPrice    Decimal @db.Decimal(19, 4) @map("total_price")
+  vatAmount     Decimal @default(0) @db.Decimal(19, 4) @map("vat_amount")
+
+  @@unique([salesOrderId, lineNumber])
+  @@map("sales_order_lines")
+}
+
+// ============================================
+// PURCHASE / PROCUREMENT (Feature 4 - ENHANCED)
+// ============================================
+
+enum PurchaseOrderStatus {
+  DRAFT
+  SENT
+  PARTIAL
+  COMPLETED
+  CANCELLED
+}
+
+model PurchaseRequest {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+
+  requestNumber String @unique @map("request_number")
+  requestDate   DateTime @map("request_date")
+  neededDate    DateTime? @map("needed_date")
+  status        String @default("DRAFT") // DRAFT, APPROVED, REJECTED, ORDERED
+  notes         String?
+
+  lines         PurchaseRequestLine[]
+  purchaseOrders PurchaseOrder[]
+
+  @@map("purchase_requests")
+}
+
+model PurchaseRequestLine {
+  id              String @id @default(uuid())
+  purchaseRequestId String @map("purchase_request_id")
+  purchaseRequest PurchaseRequest @relation(fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+
+  lineNumber    Int @map("line_number")
+  productId     String? @map("product_id")
+  product       Product? @relation("PRLines", fields: [productId], references: [id])
+  description   String
+  quantity      Decimal @db.Decimal(19, 4)
+  estimatedPrice Decimal? @db.Decimal(19, 4) @map("estimated_price")
+
+  @@unique([purchaseRequestId, lineNumber])
+  @@map("purchase_request_lines")
+}
+
+model PurchaseOrder {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+
+  orderNumber   String @unique @map("order_number")
+  orderDate     DateTime @map("order_date")
+  expectedDate  DateTime? @map("expected_date")
+  status        PurchaseOrderStatus @default(DRAFT)
+
+  supplierId    String @map("supplier_id")
+  supplier      Partner @relation("SupplierPurchaseOrders", fields: [supplierId], references: [id])
+
+  purchaseRequestId String? @map("purchase_request_id")
+  purchaseRequest   PurchaseRequest? @relation(fields: [purchaseRequestId], references: [id])
+
+  notes         String?
+  subtotal      Decimal @db.Decimal(19, 4)
+  taxAmount     Decimal @db.Decimal(19, 4) @map("tax_amount")
+  grandTotal    Decimal @db.Decimal(19, 4) @map("grand_total")
+
+  lines         PurchaseOrderLine[]
+
+  journalEntryId String? @unique @map("journal_entry_id")
+  journalEntry   JournalEntry? @relation("POJournal", fields: [journalEntryId], references: [id])
+
+  @@index([status])
+  @@index([supplierId])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderLine {
+  id              String @id @default(uuid())
+  purchaseOrderId String @map("purchase_order_id")
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  lineNumber    Int @map("line_number")
+  productId     String? @map("product_id")
+  product       Product? @relation("POLines", fields: [productId], references: [id])
+  description   String
+  quantity      Decimal @db.Decimal(19, 4)
+  receivedQty   Decimal @default(0) @db.Decimal(19, 4) @map("received_qty")
+  unitPrice     Decimal @db.Decimal(19, 4) @map("unit_price")
+  discount      Decimal @default(0) @db.Decimal(19, 4)
+  totalPrice    Decimal @db.Decimal(19, 4) @map("total_price")
+  vatAmount     Decimal @default(0) @db.Decimal(19, 4) @map("vat_amount")
+
+  @@unique([purchaseOrderId, lineNumber])
+  @@map("purchase_order_lines")
+}
+
+// ============================================
+// AUDIT LOG (Feature 5 - NEW)
+// ============================================
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  userId      String?  @map("user_id")
+  userEmail   String?  @map("user_email")
+  action      String   // CREATE, UPDATE, DELETE, VIEW, LOGIN, LOGOUT
+  module      String   // PARTNER, INVOICE, STOCK, etc.
+  entityId    String?  @map("entity_id")
+  entityType  String?  @map("entity_type")
+  oldValues   Json?    @map("old_values")
+  newValues   Json?    @map("new_values")
+  ipAddress   String?  @map("ip_address")
+  userAgent   String?  @map("user_agent")
+
+  @@index([userId])
+  @@index([module])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ============================================
+// BUDGETING (Feature 1 ENHANCED - Budget)
+// ============================================
+
+enum BudgetStatus {
+  DRAFT
+  APPROVED
+  ACTIVE
+  CLOSED
+}
+
+model Budget {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+
+  name        String
+  description String?
+  fiscalYear  Int      @map("fiscal_year")
+  status      BudgetStatus @default(DRAFT)
+
+  lines       BudgetLine[]
+
+  @@index([fiscalYear])
+  @@map("budgets")
+}
+
+model BudgetLine {
+  id          String @id @default(uuid())
+  budgetId    String @map("budget_id")
+  budget      Budget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  accountId   String @map("account_id")
+  account     Account @relation("BudgetLines", fields: [accountId], references: [id])
+
+  month       Int    // 1-12
+  plannedAmount Decimal @db.Decimal(19, 4) @map("planned_amount")
+  notes       String?
+
+  @@unique([budgetId, accountId, month])
+  @@map("budget_lines")
+}
+
+// ============================================
+// CASH & BANK MANAGEMENT (Feature 7 - NEW)
+// ============================================
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model BankStatement {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  accountId   String   @map("account_id")
+  account     Account  @relation("BankStatements", fields: [accountId], references: [id])
+
+  statementDate DateTime @map("statement_date")
+  referenceNumber String? @map("reference_number")
+  description   String
+  debit         Decimal @default(0) @db.Decimal(19, 4)
+  credit        Decimal @default(0) @db.Decimal(19, 4)
+  balance       Decimal @db.Decimal(19, 4)
+  isReconciled  Boolean @default(false) @map("is_reconciled")
+  reconciledAt  DateTime? @map("reconciled_at")
+  journalEntryId String? @map("journal_entry_id")
+  journalEntry  JournalEntry? @relation("BankStatementJournal", fields: [journalEntryId], references: [id])
+
+  @@index([accountId])
+  @@index([statementDate])
+  @@map("bank_statements")
+}
+
+model Payment {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+
+  paymentNumber String @unique @map("payment_number")
+  paymentDate   DateTime @map("payment_date")
+  paymentType   String   @map("payment_type") // INCOMING, OUTGOING
+  method        String   // TRANSFER, CASH, CHECK
+  status        PaymentStatus @default(PENDING)
+
+  partnerId     String   @map("partner_id")
+  partner       Partner  @relation("PartnerPayments", fields: [partnerId], references: [id])
+
+  accountId     String   @map("account_id")
+  account       Account  @relation("PaymentAccount", fields: [accountId], references: [id])
+
+  amount        Decimal  @db.Decimal(19, 4)
+  referenceNumber String? @map("reference_number")
+  notes         String?
+
+  journalEntryId String? @unique @map("journal_entry_id")
+  journalEntry   JournalEntry? @relation("PaymentJournal", fields: [journalEntryId], references: [id])
+
+  @@index([paymentType])
+  @@index([status])
+  @@index([partnerId])
+  @@map("payments")
+}
+
+// ============================================
+// PRODUCT PRICING (Feature 8 - ENHANCED)
+// ============================================
+
+enum PriceListType {
+  RETAIL
+  WHOLESALE
+  SPECIAL
+  PROMO
+}
+
+model PriceList {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  name        String
+  type        PriceListType @default(RETAIL)
+  currency    String  @default("IDR")
+  startDate   DateTime? @map("start_date")
+  endDate     DateTime? @map("end_date")
+  isActive    Boolean @default(true) @map("is_active")
+  minQty      Decimal @default(1) @db.Decimal(19, 4) @map("min_qty")
+
+  items       PriceListItem[]
+
+  @@map("price_lists")
+}
+
+model PriceListItem {
+  id          String @id @default(uuid())
+  priceListId String @map("price_list_id")
+  priceList   PriceList @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+
+  productId   String @map("product_id")
+  product     Product @relation("ProductPrices", fields: [productId], references: [id])
+
+  price       Decimal @db.Decimal(19, 4)
+  discountPct Decimal @default(0) @db.Decimal(5, 2) @map("discount_pct")
+
+  @@unique([priceListId, productId])
+  @@map("price_list_items")
+}
+
+// ============================================
+// CRM (Feature 9 - NEW)
+// ============================================
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  PROPOSAL
+  NEGOTIATION
+  WON
+  LOST
+}
+
+model CrmLead {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+
+  title       String
+  status      LeadStatus @default(NEW)
+  expectedValue Decimal? @db.Decimal(19, 4) @map("expected_value")
+  expectedCloseDate DateTime? @map("expected_close_date")
+  probability Int? // 0-100 percent
+
+  partnerId   String? @map("partner_id")
+  partner     Partner? @relation("PartnerLeads", fields: [partnerId], references: [id])
+
+  assignedTo  String? @map("assigned_to")
+  notes       String?
+
+  activities  CrmActivity[]
+
+  @@index([status])
+  @@index([partnerId])
+  @@map("crm_leads")
+}
+
+model CrmActivity {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  createdBy   String?  @map("created_by")
+
+  leadId      String   @map("lead_id")
+  lead        CrmLead  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  activityType String @map("activity_type") // CALL, EMAIL, MEETING, NOTE
+  summary     String
+  scheduledAt DateTime? @map("scheduled_at")
+  completedAt DateTime? @map("completed_at")
+  notes       String?
+
+  @@index([leadId])
+  @@map("crm_activities")
+}
+
+// ============================================
+// MANUFACTURING (Feature 10 - NEW)
+// ============================================
+
+enum WorkOrderStatus {
+  DRAFT
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model BillOfMaterials {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  productId   String   @unique @map("product_id")
+  product     Product  @relation("ProductBOM", fields: [productId], references: [id])
+
+  quantity    Decimal  @default(1) @db.Decimal(19, 4) // Output qty
+  uom         String
+  isActive    Boolean  @default(true) @map("is_active")
+
+  components  BomComponent[]
+  workOrders  WorkOrder[]
+
+  @@map("bill_of_materials")
+}
+
+model BomComponent {
+  id          String @id @default(uuid())
+  bomId       String @map("bom_id")
+  bom         BillOfMaterials @relation(fields: [bomId], references: [id], onDelete: Cascade)
+
+  productId   String @map("product_id")
+  product     Product @relation("BOMComponents", fields: [productId], references: [id])
+
+  quantity    Decimal @db.Decimal(19, 4)
+  uom         String
+  notes       String?
+
+  @@unique([bomId, productId])
+  @@map("bom_components")
+}
+
+model WorkOrder {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+
+  orderNumber   String @unique @map("order_number")
+  status        WorkOrderStatus @default(DRAFT)
+
+  bomId         String @map("bom_id")
+  bom           BillOfMaterials @relation(fields: [bomId], references: [id])
+
+  plannedQty    Decimal @db.Decimal(19, 4) @map("planned_qty")
+  producedQty   Decimal @default(0) @db.Decimal(19, 4) @map("produced_qty")
+
+  plannedStart  DateTime? @map("planned_start")
+  plannedEnd    DateTime? @map("planned_end")
+  actualStart   DateTime? @map("actual_start")
+  actualEnd     DateTime? @map("actual_end")
+
+  notes         String?
+
+  @@index([status])
+  @@map("work_orders")
+}
+
+// ============================================
+// PROJECT MANAGEMENT (Feature 11 - NEW)
+// ============================================
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  BLOCKED
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String?  @map("created_by")
+
+  code        String   @unique
+  name        String
+  description String?
+  status      ProjectStatus @default(PLANNING)
+
+  customerId  String?  @map("customer_id")
+  customer    Partner? @relation("CustomerProjects", fields: [customerId], references: [id])
+
+  startDate   DateTime? @map("start_date")
+  endDate     DateTime? @map("end_date")
+  budget      Decimal? @db.Decimal(19, 4)
+  actualCost  Decimal @default(0) @db.Decimal(19, 4) @map("actual_cost")
+
+  tasks       ProjectTask[]
+
+  @@map("projects")
+}
+
+model ProjectTask {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  projectId   String   @map("project_id")
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  status      TaskStatus @default(TODO)
+  priority    Int @default(3) // 1=high, 2=medium, 3=low
+  assignedTo  String?  @map("assigned_to")
+  dueDate     DateTime? @map("due_date")
+  completedAt DateTime? @map("completed_at")
+
+  @@index([projectId])
+  @@index([status])
+  @@map("project_tasks")
+}
+
+// ============================================
+// HR & PAYROLL EXTENDED (Feature 12 - ENHANCED)
+// ============================================
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+  TERMINATED
+}
+
+model Employee {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  employeeNumber String @unique @map("employee_number")
+  partnerId      String @unique @map("partner_id")
+  partner        Partner @relation("PartnerEmployee", fields: [partnerId], references: [id])
+
+  status      EmployeeStatus @default(ACTIVE)
+  department  String?
+  position    String?
+  basicSalary Decimal @db.Decimal(19, 4) @map("basic_salary")
+
+  joinDate    DateTime @map("join_date")
+  endDate     DateTime? @map("end_date")
+
+  attendances Attendance[]
+  payslips    Payslip[]
+
+  @@map("employees")
+}
+
+model Attendance {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  employeeId  String   @map("employee_id")
+  employee    Employee @relation(fields: [employeeId], references: [id])
+
+  date        DateTime @db.Date
+  checkIn     DateTime? @map("check_in")
+  checkOut    DateTime? @map("check_out")
+  status      String @default("PRESENT") // PRESENT, ABSENT, LEAVE, HOLIDAY
+  notes       String?
+
+  @@unique([employeeId, date])
+  @@index([employeeId])
+  @@map("attendances")
+}
+
+model Payslip {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  employeeId  String   @map("employee_id")
+  employee    Employee @relation(fields: [employeeId], references: [id])
+
+  period      String   // MM-YYYY
+  month       Int
+  year        Int
+
+  basicSalary   Decimal @db.Decimal(19, 4) @map("basic_salary")
+  allowances    Decimal @default(0) @db.Decimal(19, 4)
+  deductions    Decimal @default(0) @db.Decimal(19, 4)
+  pph21Amount   Decimal @default(0) @db.Decimal(19, 4) @map("pph21_amount")
+  netSalary     Decimal @db.Decimal(19, 4) @map("net_salary")
+
+  status        String @default("DRAFT") // DRAFT, APPROVED, PAID
+  paidAt        DateTime? @map("paid_at")
+
+  journalEntryId String? @unique @map("journal_entry_id")
+  journalEntry   JournalEntry? @relation("PayslipJournal", fields: [journalEntryId], references: [id])
+
+  @@unique([employeeId, period])
+  @@index([employeeId])
+  @@map("payslips")
+}
+
+// ============================================
+// MULTI-BRANCH / MULTI-COMPANY (Feature 13 - NEW)
+// ============================================
+
+model Branch {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  code        String   @unique
+  name        String
+  address     String?
+  phone       String?
+  email       String?
+  isActive    Boolean  @default(true) @map("is_active")
+  isHeadOffice Boolean @default(false) @map("is_head_office")
+
+  @@map("branches")
+}
+
+// ============================================
+// API INTEGRATIONS LOG (Feature 14 - NEW)
+// ============================================
+
+model IntegrationLog {
+  id          String   @id @default(uuid())
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  integrationType String @map("integration_type") // PAYMENT_GATEWAY, MARKETPLACE, SHIPPING
+  provider      String   // MIDTRANS, TOKOPEDIA, JNTE, etc.
+  direction     String   // INBOUND, OUTBOUND
+  endpoint      String?
+  requestPayload Json?  @map("request_payload")
+  responsePayload Json? @map("response_payload")
+  statusCode    Int?   @map("status_code")
+  status        String // SUCCESS, FAILED
+  errorMessage  String? @map("error_message")
+  referenceId   String? @map("reference_id")
+  referenceType String? @map("reference_type")
+
+  @@index([integrationType])
+  @@index([status])
+  @@index([createdAt])
+  @@map("integration_logs")
+}
+
