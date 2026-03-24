@@ -8,11 +8,13 @@ import {
   ParseUUIDPipe,
   Res,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
 import { Response } from 'express';
 import { WithholdingSlipService, CreateWithholdingSlipDto, WithholdingSlipFilter } from '../services/withholding-slip.service';
 import { WithholdingSlip } from '@domain/entities/withholding-slip.entity';
+import { CurrentUser, AuthUser } from '@modules/auth/decorators/current-user.decorator';
 
+@ApiBearerAuth('JWT')
 @ApiTags('Purchase - Withholding Slips')
 @Controller('withholding-slips')
 export class WithholdingSlipController {
@@ -21,9 +23,12 @@ export class WithholdingSlipController {
   @Post()
   @ApiOperation({ summary: 'Create a new withholding slip' })
   @ApiResponse({ status: 201, description: 'Withholding slip created successfully', type: WithholdingSlip })
-  async create(@Body() dto: CreateWithholdingSlipDto): Promise<WithholdingSlip> {
-    const userId = 'system';
-    return this.withholdingSlipService.create(dto, userId);
+  async create(
+    @Body() dto: CreateWithholdingSlipDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<WithholdingSlip> {
+    // FIX (Bug #2): Use real userId from JWT
+    return this.withholdingSlipService.create(dto, user.id);
   }
 
   @Get()
@@ -53,29 +58,31 @@ export class WithholdingSlipController {
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 20,
     };
-
     return this.withholdingSlipService.findAll(filter);
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get withholding slip by ID' })
-  @ApiResponse({ status: 200, description: 'Withholding slip found', type: WithholdingSlip })
   async findById(@Param('id', ParseUUIDPipe) id: string): Promise<WithholdingSlip> {
     return this.withholdingSlipService.findById(id);
   }
 
   @Post(':id/issue')
   @ApiOperation({ summary: 'Issue withholding slip' })
-  async issue(@Param('id', ParseUUIDPipe) id: string): Promise<WithholdingSlip> {
-    const userId = 'system';
-    return this.withholdingSlipService.issue(id, userId);
+  async issue(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<WithholdingSlip> {
+    return this.withholdingSlipService.issue(id, user.id);
   }
 
   @Post(':id/cancel')
   @ApiOperation({ summary: 'Cancel withholding slip' })
-  async cancel(@Param('id', ParseUUIDPipe) id: string): Promise<WithholdingSlip> {
-    const userId = 'system';
-    return this.withholdingSlipService.cancel(id, userId);
+  async cancel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<WithholdingSlip> {
+    return this.withholdingSlipService.cancel(id, user.id);
   }
 
   @Get(':id/validate')
@@ -88,14 +95,17 @@ export class WithholdingSlipController {
   @ApiOperation({ summary: 'Generate PPh 21 XML for multiple slips' })
   async generatePph21Xml(
     @Body('ids') ids: string[],
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
-    const userId = 'system';
-    const result = await this.withholdingSlipService.generatePph21Xml(ids, userId);
-
+    const result = await this.withholdingSlipService.generatePph21Xml(ids, user.id);
     if (result.success && result.content) {
       res.setHeader('Content-Type', 'application/xml');
       res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
+      // Return skipped info in header so client can display warnings
+      if (result.skipped?.length) {
+        res.setHeader('X-Skipped-Count', String(result.skipped.length));
+      }
       res.send(result.content);
     } else {
       res.status(400).json(result);
@@ -106,14 +116,16 @@ export class WithholdingSlipController {
   @ApiOperation({ summary: 'Generate PPh Unifikasi XML for multiple slips' })
   async generatePphUnifikasiXml(
     @Body('ids') ids: string[],
+    @CurrentUser() user: AuthUser,
     @Res() res: Response,
   ) {
-    const userId = 'system';
-    const result = await this.withholdingSlipService.generatePphUnifikasiXml(ids, userId);
-
+    const result = await this.withholdingSlipService.generatePphUnifikasiXml(ids, user.id);
     if (result.success && result.content) {
       res.setHeader('Content-Type', 'application/xml');
       res.setHeader('Content-Disposition', `attachment; filename="${result.fileName}"`);
+      if (result.skipped?.length) {
+        res.setHeader('X-Skipped-Count', String(result.skipped.length));
+      }
       res.send(result.content);
     } else {
       res.status(400).json(result);
