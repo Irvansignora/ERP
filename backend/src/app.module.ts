@@ -2,6 +2,9 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './infrastructure/database/prisma/prisma.module';
 
+// ── Auth (FIX: added — global JWT guard applied here) ─────
+import { AuthModule } from './modules/auth/auth.module';
+
 // ── Original Modules ──────────────────────────────────────
 import { MasterDataModule } from './modules/master-data/master-data.module';
 import { SalesModule } from './modules/sales/sales.module';
@@ -38,7 +41,10 @@ import { HealthController } from './presentation/controllers/health.controller';
     }),
     PrismaModule,
 
-    // Feature 1: Accounting & Finance (General Ledger sudah ada + Budgeting baru)
+    // FIX (Bug #1): AuthModule must be first so APP_GUARD registers before all routes
+    AuthModule,
+
+    // Feature 1: Accounting & Finance
     MasterDataModule,
     FinanceModule,
     GeneralLedgerModule,
@@ -59,8 +65,7 @@ import { HealthController } from './presentation/controllers/health.controller';
     // Feature 5: User & Role + Audit Log
     AuditModule,
 
-    // Feature 6: Dashboard & Reporting (via TaxEngine + summary endpoints di setiap module)
-
+    // Feature 6: Dashboard & Reporting
     // Feature 7: Cash & Bank Management
     CashBankModule,
 
@@ -76,7 +81,7 @@ import { HealthController } from './presentation/controllers/health.controller';
     // Feature 11: Project Management
     ProjectsModule,
 
-    // Feature 12: HR & Payroll (PPh21 sudah ada + HR baru)
+    // Feature 12: HR & Payroll
     PayrollModule,
     HrModule,
 
