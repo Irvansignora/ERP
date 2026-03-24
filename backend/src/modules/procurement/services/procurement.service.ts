@@ -19,8 +19,14 @@ export class ProcurementService {
     }>;
     userId?: string;
   }) {
-    const count = await this.prisma.purchaseRequest.count();
-    const requestNumber = `PR-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
+    // FIX (Bug #4): Per-year sequential numbering scoped to current year
+    const year = new Date().getFullYear();
+    const count = await this.prisma.purchaseRequest.count({
+      where: {
+        createdAt: { gte: new Date(`${year}-01-01`), lt: new Date(`${year + 1}-01-01`) },
+      },
+    });
+    const requestNumber = `PR-${year}-${String(count + 1).padStart(5, '0')}`;
 
     return this.prisma.purchaseRequest.create({
       data: {
@@ -66,6 +72,7 @@ export class ProcurementService {
     expectedDate?: Date;
     purchaseRequestId?: string;
     notes?: string;
+    vatRate?: number; // FIX (Bug #8): configurable vatRate
     lines: Array<{
       productId?: string;
       description: string;
@@ -75,8 +82,17 @@ export class ProcurementService {
     }>;
     userId?: string;
   }) {
-    const count = await this.prisma.purchaseOrder.count();
-    const orderNumber = `PO-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
+    // FIX (Bug #4): Per-year sequential numbering
+    const year = new Date().getFullYear();
+    const count = await this.prisma.purchaseOrder.count({
+      where: {
+        createdAt: { gte: new Date(`${year}-01-01`), lt: new Date(`${year + 1}-01-01`) },
+      },
+    });
+    const orderNumber = `PO-${year}-${String(count + 1).padStart(5, '0')}`;
+
+    // FIX (Bug #8): Use configurable vatRate instead of hardcoded 0.12
+    const effectiveVatRate = (dto.vatRate ?? 12) / 100;
 
     const lines = dto.lines.map((l, i) => {
       const totalPrice = l.quantity * l.unitPrice - (l.discount ?? 0);
@@ -88,12 +104,12 @@ export class ProcurementService {
         unitPrice: l.unitPrice,
         discount: l.discount ?? 0,
         totalPrice,
-        vatAmount: totalPrice * 0.12,
+        vatAmount: totalPrice * effectiveVatRate,
       };
     });
 
     const subtotal = lines.reduce((sum, l) => sum + l.totalPrice, 0);
-    const taxAmount = subtotal * 0.12;
+    const taxAmount = subtotal * effectiveVatRate;
 
     return this.prisma.purchaseOrder.create({
       data: {
@@ -113,25 +129,21 @@ export class ProcurementService {
     });
   }
 
-  async getAllPurchaseOrders(params: {
-    supplierId?: string;
-    status?: PurchaseOrderStatus;
-    limit?: number;
-    page?: number;
-  }) {
+  async getAllPurchaseOrders(params: { status?: string; supplierId?: string; limit?: number; page?: number }) {
     const skip = ((params.page ?? 1) - 1) * (params.limit ?? 20);
+    const where: any = {
+      ...(params.status && { status: params.status }),
+      ...(params.supplierId && { supplierId: params.supplierId }),
+    };
     const [data, total] = await Promise.all([
       this.prisma.purchaseOrder.findMany({
-        where: {
-          ...(params.supplierId && { supplierId: params.supplierId }),
-          ...(params.status && { status: params.status }),
-        },
-        include: { supplier: true, lines: true },
+        where,
+        include: { lines: true, supplier: true },
         orderBy: { createdAt: 'desc' },
         take: params.limit ?? 20,
         skip,
       }),
-      this.prisma.purchaseOrder.count(),
+      this.prisma.purchaseOrder.count({ where }),
     ]);
     return { data, total };
   }
@@ -139,7 +151,7 @@ export class ProcurementService {
   async getPurchaseOrderById(id: string) {
     const po = await this.prisma.purchaseOrder.findUnique({
       where: { id },
-      include: { supplier: true, lines: { include: { product: true } }, purchaseRequest: true },
+      include: { lines: true, supplier: true },
     });
     if (!po) throw new NotFoundException('Purchase Order not found');
     return po;
@@ -148,7 +160,7 @@ export class ProcurementService {
   async confirmPurchaseOrder(id: string) {
     return this.prisma.purchaseOrder.update({
       where: { id },
-      data: { status: PurchaseOrderStatus.SENT },
+      data: { status: PurchaseOrderStatus.CONFIRMED },
     });
   }
 
@@ -159,7 +171,7 @@ export class ProcurementService {
       totalSpend: orders.reduce((sum, o) => sum + Number(o.grandTotal), 0),
       byStatus: {
         draft: orders.filter((o) => o.status === 'DRAFT').length,
-        sent: orders.filter((o) => o.status === 'SENT').length,
+        confirmed: orders.filter((o) => o.status === 'CONFIRMED').length,
         completed: orders.filter((o) => o.status === 'COMPLETED').length,
       },
     };
