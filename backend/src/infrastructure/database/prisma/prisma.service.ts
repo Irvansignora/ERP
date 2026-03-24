@@ -1,8 +1,9 @@
 import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 
-// FIX: Vercel serverless cold-start issue — reuse global PrismaClient instance
-// Without this, each invocation creates a new connection pool → "Too many connections" error
+// FIX (Bug #7): Correctly reuse global PrismaClient instance in Vercel serverless.
+// The original code assigned global.__prisma but never READ it back,
+// so every cold start still created a new connection pool.
 declare global {
   // eslint-disable-next-line no-var
   var __prisma: PrismaClient | undefined;
@@ -13,8 +14,6 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   private readonly logger = new Logger(PrismaService.name);
 
   constructor() {
-    // FIX: In production (Vercel), minimal logging to reduce overhead
-    // In dev, keep full query logging for debugging
     const isProduction = process.env.NODE_ENV === 'production';
 
     super({
@@ -40,10 +39,16 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       });
     }
 
-    // FIX: Cache global instance for serverless reuse across warm invocations
-    if (!global.__prisma) {
-      global.__prisma = this;
+    // FIX: Actually USE the cached global instance if available.
+    // Without this check, the assignment below is write-only and useless.
+    if (global.__prisma) {
+      // Return the cached instance by copying its internal state.
+      // This prevents "Too many connections" on Vercel warm invocations.
+      return global.__prisma as unknown as PrismaService;
     }
+
+    // First cold start: cache this instance for subsequent invocations.
+    global.__prisma = this;
   }
 
   async onModuleInit() {
@@ -52,8 +57,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleDestroy() {
-    // FIX: Don't disconnect in serverless — connection is reused across invocations
-    // Only disconnect in non-serverless environments
+    // FIX: Don't disconnect in serverless — connection is reused across invocations.
     if (process.env.VERCEL !== '1') {
       await this.$disconnect();
       this.logger.log('Prisma Client disconnected from database');
