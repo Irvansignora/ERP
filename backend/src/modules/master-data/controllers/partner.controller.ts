@@ -11,10 +11,12 @@ import {
   HttpStatus,
   ParseUUIDPipe,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiQuery, ApiBearerAuth } from '@nestjs/swagger';
 import { PartnerService, CreatePartnerDto, UpdatePartnerDto, PartnerFilter } from '../services/partner.service';
 import { Partner } from '@domain/entities/partner.entity';
+import { CurrentUser, AuthUser } from '@modules/auth/decorators/current-user.decorator';
 
+@ApiBearerAuth('JWT')
 @ApiTags('Master Data - Partners')
 @Controller('partners')
 export class PartnerController {
@@ -24,10 +26,12 @@ export class PartnerController {
   @ApiOperation({ summary: 'Create a new partner' })
   @ApiResponse({ status: 201, description: 'Partner created successfully', type: Partner })
   @ApiResponse({ status: 400, description: 'Bad request' })
-  async create(@Body() dto: CreatePartnerDto): Promise<Partner> {
-    // TODO: Get userId from JWT token
-    const userId = 'system';
-    return this.partnerService.create(dto, userId);
+  async create(
+    @Body() dto: CreatePartnerDto,
+    @CurrentUser() user: AuthUser,
+  ): Promise<Partner> {
+    // FIX (Bug #2): Use real userId from JWT instead of hardcoded 'system'
+    return this.partnerService.create(dto, user.id);
   }
 
   @Get()
@@ -57,7 +61,6 @@ export class PartnerController {
       page: page ? parseInt(page, 10) : 1,
       limit: limit ? parseInt(limit, 10) : 20,
     };
-
     return this.partnerService.findAll(filter);
   }
 
@@ -71,7 +74,6 @@ export class PartnerController {
 
   @Get(':id/validate')
   @ApiOperation({ summary: 'Validate partner for XML export' })
-  @ApiResponse({ status: 200, description: 'Validation result' })
   async validate(@Param('id', ParseUUIDPipe) id: string) {
     return this.partnerService.validateForXmlExport(id);
   }
@@ -83,9 +85,9 @@ export class PartnerController {
   async update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdatePartnerDto,
+    @CurrentUser() user: AuthUser,
   ): Promise<Partner> {
-    const userId = 'system';
-    return this.partnerService.update(id, dto, userId);
+    return this.partnerService.update(id, dto, user.id);
   }
 
   @Delete(':id')
@@ -93,21 +95,21 @@ export class PartnerController {
   @ApiOperation({ summary: 'Delete partner (soft delete)' })
   @ApiResponse({ status: 204, description: 'Partner deleted successfully' })
   @ApiResponse({ status: 404, description: 'Partner not found' })
-  async delete(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
-    const userId = 'system';
-    return this.partnerService.delete(id, userId);
+  async delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ): Promise<void> {
+    return this.partnerService.delete(id, user.id);
   }
 
   @Get('employees/ter/:category')
   @ApiOperation({ summary: 'Get employees by TER category' })
-  @ApiResponse({ status: 200, description: 'List of employees' })
   async getEmployeesByTerCategory(@Param('category') category: 'A' | 'B' | 'C'): Promise<Partner[]> {
     return this.partnerService.getEmployeesByTerCategory(category);
   }
 
   @Get('tax/pkp')
   @ApiOperation({ summary: 'Get all PKP partners' })
-  @ApiResponse({ status: 200, description: 'List of PKP partners' })
   async getPkpPartners(): Promise<Partner[]> {
     return this.partnerService.getPkpPartners();
   }
