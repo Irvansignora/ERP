@@ -11,15 +11,31 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   // Security middleware
-  app.use(helmet({ contentSecurityPolicy: false })); // FIX: contentSecurityPolicy disabled — was blocking Swagger UI
+  app.use(helmet({ contentSecurityPolicy: false }));
   app.use(compression());
 
-  // FIX: CORS was hardcoded to localhost:3001 — breaks on Vercel deployment
-  // Now supports comma-separated origins via env var, with Vercel wildcard fallback
-  const corsOriginEnv = configService.get<string>('CORS_ORIGIN', '*');
-  const corsOrigin = corsOriginEnv.includes(',')
-    ? corsOriginEnv.split(',').map((o) => o.trim())
-    : corsOriginEnv;
+  // FIX (Bug #3): CORS — never default to wildcard '*'.
+  // credentials: true + origin: '*' is rejected by browsers anyway,
+  // and is a security misconfiguration. Require explicit origins in env.
+  const corsOriginEnv = configService.get<string>('CORS_ORIGIN');
+
+  if (!corsOriginEnv) {
+    const isDev = configService.get('NODE_ENV', 'development') === 'development';
+    if (!isDev) {
+      throw new Error(
+        'CORS_ORIGIN env var is required in production. ' +
+        'Set it to a comma-separated list of allowed origins, e.g. https://app.yourdomain.com'
+      );
+    }
+    // Dev-only fallback: allow localhost only
+    console.warn('⚠️  CORS_ORIGIN not set — allowing localhost only (dev mode)');
+  }
+
+  const corsOrigin = corsOriginEnv
+    ? corsOriginEnv.includes(',')
+      ? corsOriginEnv.split(',').map((o) => o.trim())
+      : corsOriginEnv
+    : ['http://localhost:3001', 'http://localhost:3000'];
 
   app.enableCors({
     origin: corsOrigin,
@@ -43,12 +59,20 @@ async function bootstrap() {
     },
   }));
 
-  // Swagger documentation
+  // Swagger
   const config = new DocumentBuilder()
     .setTitle('CoreTax ERP API')
     .setDescription('ERP System with Indonesian CoreTax (CTAS) XML Integration')
     .setVersion('1.0.0')
-    .addBearerAuth()
+    .addBearerAuth(
+      {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description: 'Enter JWT token (obtain from your auth provider)',
+      },
+      'JWT',
+    )
     .addTag('Health')
     .addTag('Master Data - Partners')
     .addTag('Sales - Tax Invoices')
@@ -62,7 +86,6 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
 
-  // Start server
   const port = configService.get('PORT', 3000);
   await app.listen(port);
 
