@@ -2,32 +2,122 @@ import axios from 'axios';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api/v1';
 
+// FIX (Bug #8 Frontend): Do NOT store JWT in localStorage — it is vulnerable to XSS attacks.
+// Instead, keep the token in module-level memory (cleared on page refresh) and
+// persist the refresh-token via an HttpOnly cookie set by the server.
+//
+// How this works:
+//   - On login, server responds with { accessToken } in the JSON body + sets
+//     a HttpOnly refresh-token cookie automatically.
+//   - We store the accessToken in memory only — no localStorage, no sessionStorage.
+//   - On page refresh (memory cleared), call POST /auth/refresh — the browser sends
+//     the HttpOnly cookie automatically, and the server issues a new accessToken.
+//   - On 401, redirect to /login (refresh failed or session expired).
+let _accessToken: string | null = null;
+
+export const authToken = {
+  get: () => _accessToken,
+  set: (token: string) => { _accessToken = token; },
+  clear: () => { _accessToken = null; },
+};
+
 export const api = axios.create({
   baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
+  // Required so the browser sends the HttpOnly refresh-token cookie on /auth/refresh
+  withCredentials: true,
 });
 
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
-    if (token) config.headers.Authorization = `Bearer ${token}`;
+    // FIX: Read from in-memory store, not localStorage
+    if (_accessToken) {
+      config.headers.Authorization = `Bearer ${_accessToken}`;
+    }
     return config;
   },
   (error) => Promise.reject(error),
 );
 
+// Track if a refresh is already in progress to avoid parallel refresh calls
+let _isRefreshing = false;
+let _refreshQueue: Array<(token: string) => void> = [];
+
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+  async (error) => {
+    const originalRequest = error.config;
+
+    if (error.response?.status === 401 && !originalRequest._retried) {
+      originalRequest._retried = true;
+
+      if (_isRefreshing) {
+        // Queue this request until the refresh completes
+        return new Promise((resolve) => {
+          _refreshQueue.push((token) => {
+            originalRequest.headers.Authorization = `Bearer ${token}`;
+            resolve(api(originalRequest));
+          });
+        });
+      }
+
+      _isRefreshing = true;
+
+      try {
+        // Attempt silent token refresh using HttpOnly cookie
+        const { data } = await axios.post(
+          `${API_BASE_URL}/auth/refresh`,
+          {},
+          { withCredentials: true },
+        );
+        const newToken: string = data.accessToken;
+        _accessToken = newToken;
+
+        // Replay queued requests with the new token
+        _refreshQueue.forEach((cb) => cb(newToken));
+        _refreshQueue = [];
+
+        originalRequest.headers.Authorization = `Bearer ${newToken}`;
+        return api(originalRequest);
+      } catch {
+        // Refresh failed — session expired, redirect to login
+        _accessToken = null;
+        _refreshQueue = [];
+        if (typeof window !== 'undefined') {
+          window.location.href = '/login';
+        }
+        return Promise.reject(error);
+      } finally {
+        _isRefreshing = false;
+      }
     }
+
     return Promise.reject(error);
   },
 );
 
-// Feature 1 – Accounting & Finance
+// ── Auth ──────────────────────────────────────────────────
+export const authApi = {
+  login: async (email: string, password: string) => {
+    const res = await api.post('/auth/login', { email, password });
+    // Store accessToken in memory, NOT localStorage
+    if (res.data.accessToken) {
+      authToken.set(res.data.accessToken);
+    }
+    return res;
+  },
+  logout: async () => {
+    authToken.clear();
+    // Call server to clear HttpOnly refresh-token cookie
+    await api.post('/auth/logout').catch(() => {});
+    if (typeof window !== 'undefined') {
+      window.location.href = '/login';
+    }
+  },
+  refresh: () => api.post('/auth/refresh'),
+};
+
+// ── Feature 1 – Accounting & Finance ─────────────────────
 export const accountApi = {
   getAll: () => api.get('/accounts'),
   getById: (id: string) => api.get(`/accounts/${id}`),
@@ -48,7 +138,7 @@ export const budgetingApi = {
   getVsActual: (id: string) => api.get(`/budgeting/${id}/vs-actual`),
 };
 
-// Feature 2 – Inventory Management
+// ── Feature 2 – Inventory Management ─────────────────────
 export const inventoryApi = {
   getWarehouses: () => api.get('/inventory/warehouses'),
   createWarehouse: (data: any) => api.post('/inventory/warehouses', data),
@@ -59,11 +149,11 @@ export const inventoryApi = {
   getMovements: (params?: any) => api.get('/inventory/movements', { params }),
 };
 
-// Feature 3 – Sales Management
+// ── Feature 3 – Sales Management ─────────────────────────
 export const salesOrderApi = {
   getQuotations: (params?: any) => api.get('/sales-orders/quotations', { params }),
   createQuotation: (data: any) => api.post('/sales-orders/quotations', data),
-  convertToSO: (id: string, data?: any) => api.post(`/sales-orders/quotations/${id}/convert`, data),
+  convertToSO: (id: string) => api.post(`/sales-orders/quotations/${id}/convert`),
   getAll: (params?: any) => api.get('/sales-orders', { params }),
   getById: (id: string) => api.get(`/sales-orders/${id}`),
   confirm: (id: string) => api.post(`/sales-orders/${id}/confirm`),
@@ -78,7 +168,7 @@ export const taxInvoiceApi = {
   bulkGenerateXml: (ids: string[]) => api.post('/tax-invoices/bulk-generate-xml', { ids }, { responseType: 'blob' }),
 };
 
-// Feature 4 – Purchase / Procurement
+// ── Feature 4 – Purchase / Procurement ───────────────────
 export const procurementApi = {
   getPurchaseRequests: (params?: any) => api.get('/procurement/purchase-requests', { params }),
   createPurchaseRequest: (data: any) => api.post('/procurement/purchase-requests', data),
@@ -100,12 +190,12 @@ export const withholdingApi = {
   generateUnifikasiXml: (ids: string[]) => api.post('/withholding-slips/generate-unifikasi-xml', { ids }, { responseType: 'blob' }),
 };
 
-// Feature 5 – Audit Log
+// ── Feature 5 – Audit Log ─────────────────────────────────
 export const auditApi = {
   getLogs: (params?: any) => api.get('/audit-logs', { params }),
 };
 
-// Feature 6 – Dashboard & Reporting
+// ── Feature 6 – Dashboard & Reporting ────────────────────
 export const taxEngineApi = {
   getSummary: (period: string) => api.get('/tax-engine/summary', { params: { period } }),
   runPreValidation: (period: string) => api.post('/tax-engine/pre-validation', null, { params: { period } }),
@@ -119,7 +209,7 @@ export const xmlExportApi = {
   validate: (data: any) => api.post('/xml-export/validate', data),
 };
 
-// Feature 7 – Cash & Bank
+// ── Feature 7 – Cash & Bank ───────────────────────────────
 export const cashBankApi = {
   importBankStatement: (entries: any[]) => api.post('/cash-bank/bank-statements/import', { entries }),
   getUnreconciled: (accountId: string) => api.get(`/cash-bank/bank-statements/unreconciled/${accountId}`),
@@ -130,7 +220,7 @@ export const cashBankApi = {
   getCashflow: (period: string) => api.get('/cash-bank/cashflow', { params: { period } }),
 };
 
-// Feature 8 – Pricing
+// ── Feature 8 – Pricing ───────────────────────────────────
 export const pricingApi = {
   getPriceLists: (params?: any) => api.get('/pricing/price-lists', { params }),
   createPriceList: (data: any) => api.post('/pricing/price-lists', data),
@@ -138,7 +228,7 @@ export const pricingApi = {
   deactivatePriceList: (id: string) => api.post(`/pricing/price-lists/${id}/deactivate`),
 };
 
-// Feature 9 – CRM
+// ── Feature 9 – CRM ───────────────────────────────────────
 export const crmApi = {
   getLeads: (params?: any) => api.get('/crm/leads', { params }),
   createLead: (data: any) => api.post('/crm/leads', data),
@@ -149,7 +239,7 @@ export const crmApi = {
   getCustomerHistory: (partnerId: string) => api.get(`/crm/customers/${partnerId}/history`),
 };
 
-// Feature 10 – Manufacturing
+// ── Feature 10 – Manufacturing ───────────────────────────
 export const manufacturingApi = {
   getBoms: () => api.get('/manufacturing/bom'),
   getBomById: (id: string) => api.get(`/manufacturing/bom/${id}`),
@@ -157,10 +247,11 @@ export const manufacturingApi = {
   getWorkOrders: (params?: any) => api.get('/manufacturing/work-orders', { params }),
   getProductionSummary: () => api.get('/manufacturing/work-orders/summary'),
   createWorkOrder: (data: any) => api.post('/manufacturing/work-orders', data),
-  updateWorkOrderStatus: (id: string, status: string, producedQty?: number) => api.patch(`/manufacturing/work-orders/${id}/status`, { status, producedQty }),
+  updateWorkOrderStatus: (id: string, status: string, producedQty?: number) =>
+    api.patch(`/manufacturing/work-orders/${id}/status`, { status, producedQty }),
 };
 
-// Feature 11 – Project Management
+// ── Feature 11 – Project Management ──────────────────────
 export const projectsApi = {
   getAll: (params?: any) => api.get('/projects', { params }),
   getById: (id: string) => api.get(`/projects/${id}`),
@@ -171,13 +262,14 @@ export const projectsApi = {
   updateTaskStatus: (id: string, status: string) => api.patch(`/projects/tasks/${id}/status`, { status }),
 };
 
-// Feature 12 – HR & Payroll
+// ── Feature 12 – HR & Payroll ─────────────────────────────
 export const hrApi = {
   getEmployees: (params?: any) => api.get('/hr/employees', { params }),
   createEmployee: (data: any) => api.post('/hr/employees', data),
   getEmployeeById: (id: string) => api.get(`/hr/employees/${id}`),
   recordAttendance: (data: any) => api.post('/hr/attendance', data),
-  getAttendance: (employeeId: string, month: number, year: number) => api.get(`/hr/attendance/${employeeId}`, { params: { month, year } }),
+  getAttendance: (employeeId: string, month: number, year: number) =>
+    api.get(`/hr/attendance/${employeeId}`, { params: { month, year } }),
   generatePayslip: (data: any) => api.post('/hr/payslips/generate', data),
   getPayrollSummary: (period: string) => api.get('/hr/payroll/summary', { params: { period } }),
   approvePayslip: (id: string) => api.post(`/hr/payslips/${id}/approve`),
@@ -185,11 +277,12 @@ export const hrApi = {
 };
 export const pph21Api = {
   calculateMonthly: (data: any) => api.post('/pph21/calculate-monthly', data),
-  calculateYearEnd: (employeeId: string, taxYear: number) => api.get(`/pph21/calculate-year-end/${employeeId}`, { params: { taxYear } }),
+  calculateYearEnd: (employeeId: string, taxYear: number) =>
+    api.get(`/pph21/calculate-year-end/${employeeId}`, { params: { taxYear } }),
   getTerRates: () => api.get('/pph21/ter-rates'),
 };
 
-// Master Data
+// ── Master Data ───────────────────────────────────────────
 export const partnerApi = {
   getAll: (params?: any) => api.get('/partners', { params }),
   getById: (id: string) => api.get(`/partners/${id}`),
@@ -199,14 +292,17 @@ export const partnerApi = {
   validate: (id: string) => api.get(`/partners/${id}/validate`),
 };
 
-// Feature 14 – API & Integrations
+// ── Feature 14 – API & Integrations ──────────────────────
 export const integrationsApi = {
   createCharge: (data: any) => api.post('/integrations/payment/charge', data),
-  checkPaymentStatus: (provider: string, transactionId: string) => api.get(`/integrations/payment/status/${provider}/${transactionId}`),
-  syncOrders: (provider: string, fromDate: string, toDate: string) => api.post('/integrations/marketplace/sync', { provider, fromDate, toDate }),
+  checkPaymentStatus: (provider: string, transactionId: string) =>
+    api.get(`/integrations/payment/status/${provider}/${transactionId}`),
+  syncOrders: (provider: string, fromDate: string, toDate: string) =>
+    api.post('/integrations/marketplace/sync', { provider, fromDate, toDate }),
   getShippingRates: (data: any) => api.post('/integrations/shipping/rates', data),
   createShipment: (data: any) => api.post('/integrations/shipping/shipment', data),
-  trackShipment: (provider: string, awbNumber: string) => api.get(`/integrations/shipping/track/${provider}/${awbNumber}`),
+  trackShipment: (provider: string, awbNumber: string) =>
+    api.get(`/integrations/shipping/track/${provider}/${awbNumber}`),
   getLogs: (params?: any) => api.get('/integrations/logs', { params }),
   getSummary: () => api.get('/integrations/summary'),
 };
