@@ -62,7 +62,6 @@ export class TaxInvoiceService {
   async create(dto: CreateTaxInvoiceDto, userId: string): Promise<TaxInvoice> {
     this.logger.log(`Creating tax invoice: ${dto.invoiceNumber}`);
 
-    // Check if invoice number already exists
     const existing = await this.prisma.taxInvoice.findUnique({
       where: { invoiceNumber: dto.invoiceNumber },
     });
@@ -71,30 +70,20 @@ export class TaxInvoiceService {
       throw new BadRequestException(`Tax invoice with number ${dto.invoiceNumber} already exists`);
     }
 
-    // Validate seller
-    const seller = await this.prisma.partner.findUnique({
-      where: { id: dto.sellerId },
-    });
-
+    const seller = await this.prisma.partner.findUnique({ where: { id: dto.sellerId } });
     if (!seller || seller.isDeleted) {
       throw new BadRequestException('Seller not found');
     }
 
-    // Validate buyer
-    const buyer = await this.prisma.partner.findUnique({
-      where: { id: dto.buyerId },
-    });
-
+    const buyer = await this.prisma.partner.findUnique({ where: { id: dto.buyerId } });
     if (!buyer || buyer.isDeleted) {
       throw new BadRequestException('Buyer not found');
     }
 
-    // Validate lines
     if (!dto.lines || dto.lines.length === 0) {
       throw new BadRequestException('At least one line item is required');
     }
 
-    // Calculate totals
     const vatRate = new Decimal(dto.vatRate || 12);
     const isTaxInclusive = dto.isTaxInclusive || false;
 
@@ -112,14 +101,7 @@ export class TaxInvoiceService {
       const lineVatRate = new Decimal(line.vatRate || vatRate);
       const linePpnbmRate = new Decimal(line.ppnbmRate || 0);
 
-      const calculated = TaxInvoice.calculateLine(
-        quantity,
-        price,
-        discount,
-        lineVatRate,
-        isTaxInclusive,
-      );
-
+      const calculated = TaxInvoice.calculateLine(quantity, price, discount, lineVatRate, isTaxInclusive);
       const ppnbmAmount = calculated.dpp.times(linePpnbmRate.dividedBy(100));
 
       invoiceLines.push({
@@ -149,14 +131,11 @@ export class TaxInvoiceService {
     }
 
     const grandTotal = totalDpp.plus(totalPpn).plus(totalPpnBm);
-
-    // Determine tax period
     const invoiceDate = new Date(dto.invoiceDate);
     const taxMonth = invoiceDate.getMonth() + 1;
     const taxYear = invoiceDate.getFullYear();
     const taxPeriod = `${taxMonth.toString().padStart(2, '0')}-${taxYear}`;
 
-    // Create invoice
     const invoice = await this.prisma.taxInvoice.create({
       data: {
         invoiceNumber: dto.invoiceNumber,
@@ -193,13 +172,9 @@ export class TaxInvoiceService {
         grandTotal,
         xmlGenerated: false,
         createdBy: userId,
-        lines: {
-          create: invoiceLines,
-        },
+        lines: { create: invoiceLines },
       },
-      include: {
-        lines: true,
-      },
+      include: { lines: true },
     });
 
     this.logger.log(`Tax invoice created: ${invoice.id}`);
@@ -212,26 +187,11 @@ export class TaxInvoiceService {
     const skip = (page - 1) * limit;
 
     const where: any = {};
-
-    if (filter.taxPeriod) {
-      where.taxPeriod = filter.taxPeriod;
-    }
-
-    if (filter.buyerId) {
-      where.buyerId = filter.buyerId;
-    }
-
-    if (filter.sellerId) {
-      where.sellerId = filter.sellerId;
-    }
-
-    if (filter.xmlGenerated !== undefined) {
-      where.xmlGenerated = filter.xmlGenerated;
-    }
-
-    if (filter.approvalStatus) {
-      where.approvalStatus = filter.approvalStatus;
-    }
+    if (filter.taxPeriod) where.taxPeriod = filter.taxPeriod;
+    if (filter.buyerId) where.buyerId = filter.buyerId;
+    if (filter.sellerId) where.sellerId = filter.sellerId;
+    if (filter.xmlGenerated !== undefined) where.xmlGenerated = filter.xmlGenerated;
+    if (filter.approvalStatus) where.approvalStatus = filter.approvalStatus;
 
     const [invoices, total] = await Promise.all([
       this.prisma.taxInvoice.findMany({
@@ -239,31 +199,18 @@ export class TaxInvoiceService {
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
-        include: {
-          lines: true,
-          seller: true,
-          buyer: true,
-        },
+        include: { lines: true, seller: true, buyer: true },
       }),
       this.prisma.taxInvoice.count({ where }),
     ]);
 
-    return {
-      data: invoices.map(i => this.mapToEntity(i)),
-      total,
-      page,
-      limit,
-    };
+    return { data: invoices.map(i => this.mapToEntity(i)), total, page, limit };
   }
 
   async findById(id: string): Promise<TaxInvoice> {
     const invoice = await this.prisma.taxInvoice.findUnique({
       where: { id },
-      include: {
-        lines: true,
-        seller: true,
-        buyer: true,
-      },
+      include: { lines: true, seller: true, buyer: true },
     });
 
     if (!invoice) {
@@ -277,8 +224,6 @@ export class TaxInvoiceService {
     this.logger.log(`Generating XML for tax invoice: ${id}`);
 
     const invoice = await this.findById(id);
-    
-    // Validate before generating XML
     const validation = this.validator.validateTaxInvoice(invoice);
     if (!validation.isValid) {
       return {
@@ -287,20 +232,14 @@ export class TaxInvoiceService {
       };
     }
 
-    // Get company config for TIN
     const companyConfig = await this.prisma.companyConfig.findFirst();
     if (!companyConfig) {
-      return {
-        success: false,
-        error: 'Company configuration not found',
-      };
+      return { success: false, error: 'Company configuration not found' };
     }
 
-    // Generate XML
     const result = this.xmlGenerator.generateVatOutXml([invoice], companyConfig.companyTin);
 
     if (result.success && result.content) {
-      // Update invoice with XML info
       await this.prisma.taxInvoice.update({
         where: { id },
         data: {
@@ -312,7 +251,6 @@ export class TaxInvoiceService {
         },
       });
 
-      // Log XML generation
       await this.prisma.xmlGenerationLog.create({
         data: {
           documentType: 'TAX_INVOICE',
@@ -338,7 +276,6 @@ export class TaxInvoiceService {
       try {
         const invoice = await this.findById(id);
         const validation = this.validator.validateTaxInvoice(invoice);
-        
         if (validation.isValid) {
           invoices.push(invoice);
         } else {
@@ -358,28 +295,29 @@ export class TaxInvoiceService {
 
     const companyConfig = await this.prisma.companyConfig.findFirst();
     if (!companyConfig) {
-      return {
-        success: false,
-        error: 'Company configuration not found',
-      };
+      return { success: false, error: 'Company configuration not found' };
     }
 
     const result = this.xmlGenerator.generateVatOutXml(invoices, companyConfig.companyTin);
 
     if (result.success) {
-      // Update all invoices
-      for (const invoice of invoices) {
-        await this.prisma.taxInvoice.update({
-          where: { id: invoice.id },
-          data: {
-            xmlGenerated: true,
-            xmlGeneratedAt: new Date(),
-            xmlFileName: result.fileName,
-            xmlContent: result.content,
-            updatedBy: userId,
-          },
-        });
-      }
+      // FIX (Bug #5): Wrap all updates in a single transaction.
+      // Previously: sequential for..await without transaction — partial failure
+      // left some invoices marked xmlGenerated=true without a complete XML.
+      await this.prisma.$transaction(
+        invoices.map((invoice) =>
+          this.prisma.taxInvoice.update({
+            where: { id: invoice.id },
+            data: {
+              xmlGenerated: true,
+              xmlGeneratedAt: new Date(),
+              xmlFileName: result.fileName,
+              xmlContent: result.content,
+              updatedBy: userId,
+            },
+          }),
+        ),
+      );
     }
 
     return result;
@@ -391,6 +329,25 @@ export class TaxInvoiceService {
   }
 
   async markAsApproved(id: string, approvalNumber: string): Promise<TaxInvoice> {
+    // FIX (Bug #6): Validate status before approving.
+    // Previously: any invoice could be approved regardless of state.
+    const existing = await this.prisma.taxInvoice.findUnique({ where: { id } });
+    if (!existing) {
+      throw new NotFoundException(`Tax invoice with ID ${id} not found`);
+    }
+
+    const allowedStatuses = ['PENDING', 'SUBMITTED', 'XML_GENERATED'];
+    if (!allowedStatuses.includes(existing.approvalStatus || '')) {
+      throw new BadRequestException(
+        `Cannot approve invoice in status "${existing.approvalStatus || 'NONE'}". ` +
+        `Allowed statuses: ${allowedStatuses.join(', ')}`
+      );
+    }
+
+    if (!existing.xmlGenerated) {
+      throw new BadRequestException('XML must be generated before approving the invoice');
+    }
+
     const invoice = await this.prisma.taxInvoice.update({
       where: { id },
       data: {
@@ -398,11 +355,7 @@ export class TaxInvoiceService {
         approvalDate: new Date(),
         approvalNumber,
       },
-      include: {
-        lines: true,
-        seller: true,
-        buyer: true,
-      },
+      include: { lines: true, seller: true, buyer: true },
     });
 
     return this.mapToEntity(invoice);
