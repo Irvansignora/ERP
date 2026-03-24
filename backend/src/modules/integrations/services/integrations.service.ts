@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '@infrastructure/database/prisma/prisma.service';
 
 @Injectable()
@@ -20,7 +20,12 @@ export class IntegrationsService {
     referenceId?: string;
     referenceType?: string;
   }) {
-    return this.prisma.integrationLog.create({ data });
+    try {
+      return await this.prisma.integrationLog.create({ data });
+    } catch (err) {
+      // Log but don't propagate — logging failure shouldn't kill the main request
+      this.logger.error(`Failed to write integration log: ${err.message}`);
+    }
   }
 
   // ── Payment Gateway (Midtrans / Xendit) ──────────────────
@@ -32,6 +37,17 @@ export class IntegrationsService {
     customerEmail: string;
     paymentMethod?: string;
   }) {
+    // FIX (Bug #14): Validate required fields — previously no validation at all
+    if (!dto.orderId || !dto.amount || dto.amount <= 0) {
+      throw new BadRequestException('orderId and a positive amount are required');
+    }
+    if (!dto.customerName || !dto.customerEmail) {
+      throw new BadRequestException('customerName and customerEmail are required');
+    }
+    if (!['MIDTRANS', 'XENDIT'].includes(dto.provider)) {
+      throw new BadRequestException('provider must be MIDTRANS or XENDIT');
+    }
+
     const endpoint = `/v2/charge`;
     const requestPayload = {
       order_id: dto.orderId,
@@ -48,7 +64,9 @@ export class IntegrationsService {
         order_id: dto.orderId,
         status_code: '201',
         payment_type: dto.paymentMethod ?? 'bank_transfer',
+        gross_amount: String(dto.amount), // FIX: use actual amount, not hardcoded '0'
         va_numbers: [{ bank: 'bca', va_number: '12345678901234' }],
+        _mock: true, // FIX: mark mock responses explicitly so callers can detect
       };
 
       await this.logIntegration({
@@ -82,12 +100,32 @@ export class IntegrationsService {
   }
 
   async checkPaymentStatus(provider: string, transactionId: string) {
+    // FIX (Bug #14): Validate inputs
+    if (!provider || !transactionId) {
+      throw new BadRequestException('provider and transactionId are required');
+    }
+
+    // FIX (Bug #14): gross_amount was hardcoded '0' — callers could not trust the value.
+    // Now we look up the actual amount from integration logs if available.
+    const lastLog = await this.prisma.integrationLog.findFirst({
+      where: { referenceId: transactionId, integrationType: 'PAYMENT_GATEWAY' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const grossAmount = lastLog?.requestPayload
+      ? (typeof lastLog.requestPayload === 'object'
+          ? (lastLog.requestPayload as any).gross_amount ?? '0'
+          : '0')
+      : '0';
+
     const mockStatus = {
       transaction_id: transactionId,
       transaction_status: 'settlement',
       settlement_time: new Date().toISOString(),
-      gross_amount: '0',
+      gross_amount: String(grossAmount), // FIX: use actual amount from log
+      _mock: true,
     };
+
     await this.logIntegration({
       integrationType: 'PAYMENT_GATEWAY',
       provider,
@@ -98,14 +136,24 @@ export class IntegrationsService {
       status: 'SUCCESS',
       referenceId: transactionId,
     });
+
     return mockStatus;
   }
 
   // ── Marketplace (Tokopedia / Shopee) ─────────────────────
   async syncMarketplaceOrders(provider: 'TOKOPEDIA' | 'SHOPEE', params: { fromDate: Date; toDate: Date }) {
+    if (!['TOKOPEDIA', 'SHOPEE'].includes(provider)) {
+      throw new BadRequestException('provider must be TOKOPEDIA or SHOPEE');
+    }
+    if (!params.fromDate || !params.toDate) {
+      throw new BadRequestException('fromDate and toDate are required');
+    }
+    if (params.fromDate > params.toDate) {
+      throw new BadRequestException('fromDate must be before toDate');
+    }
+
     const endpoint = `/api/orders`;
     try {
-      // NOTE: Replace with real marketplace SDK call in production
       const mockOrders = [
         {
           order_id: `MKT-${Date.now()}`,
@@ -114,6 +162,7 @@ export class IntegrationsService {
           total: 500000,
           items: [],
           buyer: { name: 'Customer Marketplace', email: 'buyer@example.com' },
+          _mock: true,
         },
       ];
 
@@ -143,14 +192,21 @@ export class IntegrationsService {
     }
   }
 
-  // ── Shipping / Ekspedisi (JNE / SiCepat / JnT) ───────────
+  // ── Shipping / Ekspedisi ─────────────────────────────────
   async checkShippingRate(dto: {
     provider: 'JNE' | 'SICEPAT' | 'JNT' | 'ANTERAJA';
     origin: string;
     destination: string;
-    weight: number; // grams
+    weight: number;
     service?: string;
   }) {
+    if (!dto.origin || !dto.destination) {
+      throw new BadRequestException('origin and destination are required');
+    }
+    if (!dto.weight || dto.weight <= 0) {
+      throw new BadRequestException('weight must be a positive number (grams)');
+    }
+
     const endpoint = `/tariff`;
     const mockRates = [
       { service: 'REG', etd: '2-3 hari', cost: 18000 },
@@ -169,7 +225,7 @@ export class IntegrationsService {
       status: 'SUCCESS',
     });
 
-    return { provider: dto.provider, rates: mockRates };
+    return { provider: dto.provider, rates: mockRates, _mock: true };
   }
 
   async createShipment(dto: {
@@ -183,12 +239,17 @@ export class IntegrationsService {
     weight: number;
     description: string;
   }) {
+    if (!dto.orderId || !dto.service || !dto.receiverName || !dto.receiverAddress) {
+      throw new BadRequestException('orderId, service, receiverName, and receiverAddress are required');
+    }
+
     const mockAWB = `AWB${dto.provider}${Date.now()}`;
     const mockResult = {
       awb_number: mockAWB,
       order_id: dto.orderId,
       status: 'CREATED',
       estimated_delivery: '2-3 hari',
+      _mock: true,
     };
 
     await this.logIntegration({
@@ -208,6 +269,10 @@ export class IntegrationsService {
   }
 
   async trackShipment(provider: string, awbNumber: string) {
+    if (!provider || !awbNumber) {
+      throw new BadRequestException('provider and awbNumber are required');
+    }
+
     const mockTracking = {
       awb_number: awbNumber,
       status: 'IN_TRANSIT',
@@ -215,6 +280,7 @@ export class IntegrationsService {
         { date: new Date().toISOString(), location: 'Jakarta Timur', description: 'Paket diterima kurir' },
         { date: new Date().toISOString(), location: 'Hub Jakarta', description: 'Paket tiba di hub' },
       ],
+      _mock: true,
     };
 
     await this.logIntegration({
@@ -250,19 +316,25 @@ export class IntegrationsService {
   }
 
   async getIntegrationSummary() {
-    const logs = await this.prisma.integrationLog.findMany({
-      orderBy: { createdAt: 'desc' },
-      take: 1000,
+    // FIX (Bug #15): Replace in-memory aggregation over 1000 records
+    // with a proper database-level groupBy. This is accurate regardless
+    // of log volume and much more efficient.
+    const grouped = await this.prisma.integrationLog.groupBy({
+      by: ['integrationType', 'status'],
+      _count: { id: true },
     });
 
     const byType: Record<string, { total: number; success: number; failed: number }> = {};
-    for (const log of logs) {
-      if (!byType[log.integrationType]) byType[log.integrationType] = { total: 0, success: 0, failed: 0 };
-      byType[log.integrationType].total++;
-      if (log.status === 'SUCCESS') byType[log.integrationType].success++;
-      else byType[log.integrationType].failed++;
+
+    for (const row of grouped) {
+      const type = row.integrationType;
+      if (!byType[type]) byType[type] = { total: 0, success: 0, failed: 0 };
+      byType[type].total += row._count.id;
+      if (row.status === 'SUCCESS') byType[type].success += row._count.id;
+      else byType[type].failed += row._count.id;
     }
 
-    return { total: logs.length, byType };
+    const total = Object.values(byType).reduce((sum, t) => sum + t.total, 0);
+    return { total, byType };
   }
 }
