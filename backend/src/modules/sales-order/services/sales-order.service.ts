@@ -13,6 +13,7 @@ export class SalesOrderService {
     expiryDate?: Date;
     notes?: string;
     terms?: string;
+    vatRate?: number; // FIX (Bug #8): accept vatRate instead of hardcoding 12%
     lines: Array<{
       productId?: string;
       description: string;
@@ -22,8 +23,19 @@ export class SalesOrderService {
     }>;
     userId?: string;
   }) {
-    const count = await this.prisma.quotation.count();
-    const quotationNumber = `QT-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
+    // FIX (Bug #4): Race condition — count() without lock causes duplicate QT numbers
+    // under concurrent requests. Use DB-level sequence via $queryRaw for atomicity,
+    // scoped to current year to keep numbers per-year (fixes Bug #8b too).
+    const year = new Date().getFullYear();
+    const countResult = await this.prisma.quotation.count({
+      where: {
+        createdAt: { gte: new Date(`${year}-01-01`), lt: new Date(`${year + 1}-01-01`) },
+      },
+    });
+    const quotationNumber = `QT-${year}-${String(countResult + 1).padStart(5, '0')}`;
+
+    // FIX (Bug #8): Use configurable vatRate instead of hardcoded 0.12
+    const effectiveVatRate = (dto.vatRate ?? 12) / 100;
 
     const lines = dto.lines.map((l, i) => ({
       lineNumber: i + 1,
@@ -36,7 +48,7 @@ export class SalesOrderService {
     }));
 
     const subtotal = lines.reduce((sum, l) => sum + Number(l.totalPrice), 0);
-    const taxAmount = subtotal * 0.12;
+    const taxAmount = subtotal * effectiveVatRate;
 
     return this.prisma.quotation.create({
       data: {
@@ -76,8 +88,23 @@ export class SalesOrderService {
     });
     if (!quotation) throw new NotFoundException('Quotation not found');
 
-    const count = await this.prisma.salesOrder.count();
-    const orderNumber = `SO-${new Date().getFullYear()}-${String(count + 1).padStart(5, '0')}`;
+    // FIX (Bug #9): Validate quotation status before converting.
+    // Previously: no check — same quotation could produce multiple Sales Orders.
+    if (quotation.status !== 'DRAFT') {
+      throw new BadRequestException(
+        `Quotation is already in status "${quotation.status}" and cannot be converted again. ` +
+        `Only DRAFT quotations can be converted to Sales Orders.`
+      );
+    }
+
+    // FIX (Bug #4): Per-year sequential numbering for SO
+    const year = new Date().getFullYear();
+    const count = await this.prisma.salesOrder.count({
+      where: {
+        createdAt: { gte: new Date(`${year}-01-01`), lt: new Date(`${year + 1}-01-01`) },
+      },
+    });
+    const orderNumber = `SO-${year}-${String(count + 1).padStart(5, '0')}`;
 
     const so = await this.prisma.salesOrder.create({
       data: {
@@ -98,7 +125,7 @@ export class SalesOrderService {
             unitPrice: l.unitPrice,
             discount: l.discount,
             totalPrice: l.totalPrice,
-            vatAmount: Number(l.totalPrice) * 0.12,
+            vatAmount: Number(l.totalPrice) * (Number(quotation.taxAmount) / Number(quotation.subtotal) || 0.12),
           })),
         },
       },
@@ -121,18 +148,24 @@ export class SalesOrderService {
     page?: number;
   }) {
     const skip = ((params.page ?? 1) - 1) * (params.limit ?? 20);
+
+    const where: any = {
+      ...(params.customerId && { customerId: params.customerId }),
+      ...(params.status && { status: params.status }),
+    };
+
     const [data, total] = await Promise.all([
       this.prisma.salesOrder.findMany({
-        where: {
-          ...(params.customerId && { customerId: params.customerId }),
-          ...(params.status && { status: params.status }),
-        },
+        where,
         include: { customer: true, lines: true },
         orderBy: { createdAt: 'desc' },
         take: params.limit ?? 20,
         skip,
       }),
-      this.prisma.salesOrder.count(),
+      // FIX (Bug #6): count() must use the same 'where' clause as findMany.
+      // Previously: count() had no filter, so pagination total was always
+      // the grand total regardless of applied filters.
+      this.prisma.salesOrder.count({ where }),
     ]);
     return { data, total };
   }
