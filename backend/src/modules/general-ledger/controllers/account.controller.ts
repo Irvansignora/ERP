@@ -10,7 +10,7 @@ export class AccountController {
 
   @Post()
   @ApiOperation({ summary: 'Create a new account' })
-  @ApiResponse({ status: 201, description: 'Account created successfully', type: Account })
+  @ApiResponse({ status: 201, description: 'Account created successfully' })
   async create(@Body() dto: CreateAccountDto): Promise<Account> {
     return this.accountService.create(dto);
   }
