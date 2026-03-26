@@ -105,7 +105,7 @@ export class PartnerController {
   @Get('employees/ter/:category')
   @ApiOperation({ summary: 'Get employees by TER category' })
   async getEmployeesByTerCategory(@Param('category') category: 'A' | 'B' | 'C'): Promise<Partner[]> {
-    return this.partnerService.getEmployeesByTerCategory(category);
+    return this.partnerService.getEmployeesByTerCategory(category as any);
   }
 
   @Get('tax/pkp')
