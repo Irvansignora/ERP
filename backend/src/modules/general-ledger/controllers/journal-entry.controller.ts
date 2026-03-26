@@ -12,7 +12,7 @@ export class JournalEntryController {
 
   @Post()
   @ApiOperation({ summary: 'Create a new journal entry' })
-  @ApiResponse({ status: 201, description: 'Journal entry created successfully', type: JournalEntry })
+  @ApiResponse({ status: 201, description: 'Journal entry created successfully' })
   async create(
     @Body() dto: CreateJournalEntryDto,
     @CurrentUser() user: AuthUser,
