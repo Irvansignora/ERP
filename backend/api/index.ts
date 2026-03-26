@@ -1,7 +1,7 @@
-// FIX: Register path aliases with explicit tsconfig path BEFORE any other imports.
-// Using 'tsconfig-paths/register' alone fails on Vercel because process.cwd()
-// does not point to the directory containing tsconfig.json at runtime.
-// We must explicitly load the config using __dirname-relative path.
+// Path aliases (@domain/*, @infrastructure/*, etc.) are registered automatically
+// by ts-node via the "ts-node": { "require": ["tsconfig-paths/register"] } in tsconfig.json.
+// The manual registration below is a fallback for environments where ts-node
+// config is not picked up (e.g. plain node running compiled .js files).
 import * as tsConfigPaths from 'tsconfig-paths';
 import * as path from 'path';
 
@@ -33,11 +33,9 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
-  // Security middleware
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(compression());
 
-  // CORS - allow all for Vercel deployment
   app.enableCors({
     origin: configService.get('CORS_ORIGIN', '*'),
     credentials: true,
@@ -45,12 +43,10 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
 
-  // Global prefix
   const apiPrefix = configService.get('API_PREFIX', 'api');
   const apiVersion = configService.get('API_VERSION', 'v1');
   app.setGlobalPrefix(`${apiPrefix}/${apiVersion}`);
 
-  // Validation pipe
   app.useGlobalPipes(new ValidationPipe({
     whitelist: true,
     forbidNonWhitelisted: true,
@@ -58,7 +54,6 @@ async function bootstrap() {
     transformOptions: { enableImplicitConversion: true },
   }));
 
-  // Swagger docs
   const config = new DocumentBuilder()
     .setTitle('CoreTax ERP API')
     .setDescription('ERP System with Indonesian CoreTax (CTAS) XML Integration')
