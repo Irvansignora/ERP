@@ -140,7 +140,7 @@ export class JournalEntryService {
       throw new BadRequestException('Only posted entries can be reversed');
     }
 
-    const reversalLines = entry.lines.map((line) => ({
+    const reversalLines = (entry as any).lines.map((line: any) => ({
       accountId: line.accountId,
       debit: Number(line.credit),
       credit: Number(line.debit),
