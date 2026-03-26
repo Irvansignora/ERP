@@ -333,9 +333,8 @@ model TaxInvoice {
   // Relations
   lines           TaxInvoiceLine[]
   
-  
-  journalEntryId String? @unique @map("journal_entry_id")
-  journalEntry  JournalEntry? @relation("BankStatementJournal", fields: [journalEntryId], references: [id])
+  journalEntryId  String? @unique @map("journal_entry_id")
+  journalEntry    JournalEntry? @relation("TaxInvoiceJournal", fields: [journalEntryId], references: [id])
   
   @@index([invoiceNumber])
   @@index([taxPeriod])
@@ -561,7 +560,7 @@ model JournalEntry {
   partner         Partner? @relation(fields: [partnerId], references: [id])
   
   // Related Documents
-  taxInvoice      TaxInvoice?
+  taxInvoice      TaxInvoice?  @relation("TaxInvoiceJournal")
   withholdingSlip WithholdingSlip?
   salesOrder      SalesOrder?       @relation("SOJournal")
   purchaseOrder   PurchaseOrder?    @relation("POJournal")
@@ -1182,9 +1181,9 @@ model BankStatement {
   balance       Decimal @db.Decimal(19, 4)
   isReconciled  Boolean @default(false) @map("is_reconciled")
   reconciledAt  DateTime? @map("reconciled_at")
-  journalEntryId String? @map("journal_entry_id")
+  journalEntryId String? @unique @map("journal_entry_id")
   journalEntry  JournalEntry? @relation("BankStatementJournal", fields: [journalEntryId], references: [id])
-
+ 
   @@index([accountId])
   @@index([statementDate])
   @@map("bank_statements")
