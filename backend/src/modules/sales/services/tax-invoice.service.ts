@@ -146,7 +146,7 @@ export class TaxInvoiceService {
         taxPeriod,
         taxYear,
         taxMonth,
-        transactionCode: dto.transactionCode,
+        transactionCode: dto.transactionCode as any,
         additionalInfo: dto.additionalInfo,
         customDoc: dto.customDoc,
         customDocMonthYear: dto.customDocMonthYear,
