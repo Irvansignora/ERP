@@ -160,7 +160,7 @@ export class ProcurementService {
   async confirmPurchaseOrder(id: string) {
     return this.prisma.purchaseOrder.update({
       where: { id },
-      data: { status: PurchaseOrderStatus.CONFIRMED },
+      data: { status: PurchaseOrderStatus.SENT },
     });
   }
 
@@ -171,7 +171,7 @@ export class ProcurementService {
       totalSpend: orders.reduce((sum, o) => sum + Number(o.grandTotal), 0),
       byStatus: {
         draft: orders.filter((o) => o.status === 'DRAFT').length,
-        confirmed: orders.filter((o) => o.status === 'CONFIRMED').length,
+        sent: orders.filter((o) => o.status === 'SENT').length,,
         completed: orders.filter((o) => o.status === 'COMPLETED').length,
       },
     };
