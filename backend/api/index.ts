@@ -1,3 +1,9 @@
+// FIX: Register tsconfig-paths FIRST so @infrastructure/*, @domain/*, etc.
+// are resolved correctly at runtime in Vercel serverless environment.
+// Without this, Node.js cannot resolve TypeScript path aliases and throws:
+//   "Cannot find module '@infrastructure/database/prisma/prisma.service'"
+import 'tsconfig-paths/register';
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
