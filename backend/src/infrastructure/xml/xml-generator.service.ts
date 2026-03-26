@@ -59,7 +59,7 @@ export class XmlGeneratorService {
     }
   }
 
-  private addTaxInvoiceToXml(parent: any, invoice: TaxInvoice): void {
+  private addTaxInvoiceToXml(parent: any, invoice: any): void {
     const taxInvoice = parent.ele('TaxInvoice');
 
     // Tax Invoice Date (YYYY-MM-DD)
@@ -121,7 +121,7 @@ export class XmlGeneratorService {
     }
   }
 
-  private addLineItemToXml(parent: any, line: TaxInvoiceLine): void {
+  private addLineItemToXml(parent: any, line: any): void {
     const goodService = parent.ele('GoodService');
 
     // Option (A/B) - A for main goods, B for others
@@ -213,7 +213,7 @@ export class XmlGeneratorService {
     }
   }
 
-  private addPph21SlipToXml(parent: any, slip: WithholdingSlip): void {
+  private addPph21SlipToXml(parent: any, slip: any): void {
     const slipElement = parent.ele('WithholdingSlip');
 
     // Slip Number
@@ -316,7 +316,7 @@ export class XmlGeneratorService {
     }
   }
 
-  private addPphUnifikasiSlipToXml(parent: any, slip: WithholdingSlip): void {
+  private addPphUnifikasiSlipToXml(parent: any, slip: any): void {
     const bupot = parent.ele('BuktiPotong');
 
     // Slip Number
