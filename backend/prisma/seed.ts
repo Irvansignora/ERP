@@ -1,4 +1,4 @@
-import { PrismaClient, AccountType, PartnerType, TaxStatus, ProductType, WithholdingType } from '@prisma/client';
+import { PrismaClient, AccountType, PartnerType, PartnerStatus, TaxStatus, ProductType, WithholdingType } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
