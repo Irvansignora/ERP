@@ -333,9 +333,9 @@ model TaxInvoice {
   // Relations
   lines           TaxInvoiceLine[]
   
-  // Journal Entry Reference
-  journalEntryId  String? @unique @map("journal_entry_id")
-  journalEntry    JournalEntry? @relation(fields: [journalEntryId], references: [id])
+  
+  journalEntryId String? @unique @map("journal_entry_id")
+  journalEntry  JournalEntry? @relation("BankStatementJournal", fields: [journalEntryId], references: [id])
   
   @@index([invoiceNumber])
   @@index([taxPeriod])
