@@ -171,7 +171,7 @@ export class ProcurementService {
       totalSpend: orders.reduce((sum, o) => sum + Number(o.grandTotal), 0),
       byStatus: {
         draft: orders.filter((o) => o.status === 'DRAFT').length,
-        sent: orders.filter((o) => o.status === 'SENT').length,,
+        sent: orders.filter((o) => o.status === 'SENT').length,
         completed: orders.filter((o) => o.status === 'COMPLETED').length,
       },
     };
